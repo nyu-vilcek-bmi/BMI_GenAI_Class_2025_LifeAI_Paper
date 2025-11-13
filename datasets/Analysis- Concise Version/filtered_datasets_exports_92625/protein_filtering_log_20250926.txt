@@ -1,0 +1,53 @@
+Protein Length Filtering Log
+=============================
+Processing Date: 2025-09-26 13:40:22
+R Version: R version 4.4.1 (2024-06-14)
+Working Directory: /Users/neal_cody_nyu/Documents/011_GenAI_ClassPaper/Reviewer_C_Report_3_uniprot_datafile_62725/082225_kolker_feedback/RMD_combined_fig3_4_and_4_datasets/Genes Team final submission 926
+Output Directory: /Users/neal_cody_nyu/Documents/011_GenAI_ClassPaper/Reviewer_C_Report_3_uniprot_datafile_62725/082225_kolker_feedback/RMD_combined_fig3_4_and_4_datasets/Genes Team final submission 926
+
+Filtering Parameters:
+--------------------
+Minimum Length: 50 aa
+Maximum Length: 600 aa
+
+Dataset Processing Summary:
+==========================
+
+Dataset 1: Dataset_1
+---------------------------------
+Original non-redundant proteins: 
+After length filtering (50-600 aa): 14685
+Retention rate: %
+Output file: Dataset_1_nonredundant_filtered_50_600aa.csv
+Columns exported: 19 (Entry, Reviewed, Entry Name, Protein names, Gene Names, ...)
+
+Dataset 2: Dataset_2
+---------------------------------
+Original non-redundant proteins: 
+After length filtering (50-600 aa): 13328
+Retention rate: %
+Output file: Dataset_2_nonredundant_filtered_50_600aa.csv
+Columns exported: 19 (Entry, Reviewed, Entry Name, Protein names, Gene Names, ...)
+
+Dataset 3: Dataset_3
+---------------------------------
+Original non-redundant proteins: 
+After length filtering (50-600 aa): 14881
+Retention rate: %
+Output file: Dataset_3_nonredundant_filtered_50_600aa.csv
+Columns exported: 22 (Entry, Reviewed, Entry Name, Protein names, Gene Names, ...)
+
+Dataset 4: Dataset_4
+---------------------------------
+Original non-redundant proteins: 
+After length filtering (50-600 aa): 12378
+Retention rate: %
+Output file: Dataset_4_nonredundant_filtered_50_600aa.csv
+Columns exported: 23 (Entry, Reviewed, Entry Name, Protein names, Gene Names, ...)
+
+Export Summary:
+==============
+Total datasets processed: 4
+Successfully exported: 4
+Export timestamp: 2025-09-26 13:40:22
+

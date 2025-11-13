@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAD Interactive Methodology Explorer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="75" cy="75" r="1" fill="rgba(255,255,255,0.1)"/><circle cx="50" cy="10" r="1" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
+            opacity: 0.3;
+        }
+        
+        .header-content {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .title {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            font-size: 18px;
+            opacity: 0.9;
+            margin-bottom: 20px;
+        }
+        
+        .instruction {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 14px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .main-content {
+            padding: 40px;
+        }
+        
+        .summary-section {
+            background: #f7f8fa;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .summary-title {
+            font-size: 24px;
+            font-weight: bold;
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 25px;
+        }
+        
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0 auto;
+            max-width: 900px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .summary-table th {
+            background: #34495e;
+            color: white;
+            padding: 15px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .summary-table td {
+            padding: 15px;
+            text-align: center;
+            border-bottom: 1px solid #ecf0f1;
+            font-size: 14px;
+        }
+        
+        .summary-table tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+        
+        .dataset-number {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .total-proteins {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+        
+        .proteins-range {
+            color: #9b59b6;
+            font-weight: bold;
+        }
+        
+        .percent-total {
+            color: #3498db;
+            font-weight: bold;
+        }
+        
+        .non-redundant {
+            color: #27ae60;
+            font-weight: bold;
+        }
+        
+        .percent-nonred {
+            color: #16a085;
+            font-weight: bold;
+        }
+        
+        .key-method {
+            color: #7f8c8d;
+            font-weight: 600;
+            font-size: 13px;
+        }
+        
+        .methodology-overview {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        
+        .dataset-column {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            border: 3px solid;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        
+        .dataset3-column {
+            border-color: #3498db;
+        }
+        
+        .dataset4-column {
+            border-color: #27ae60;
+        }
+        
+        .dataset-column:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.1);
+        }
+        
+        .dataset-header {
+            font-size: 22px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+        }
+        
+        .dataset3-header {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+        }
+        
+        .dataset4-header {
+            background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+        }
+        
+        .dataset-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .dataset-box {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-left: 5px solid;
+            position: relative;
+        }
+        
+        .dataset-box:hover {
+            transform: translateX(5px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        
+        .dataset3-dataset {
+            border-left-color: #3498db;
+        }
+        
+        .dataset4-dataset {
+            border-left-color: #27ae60;
+        }
+        
+        .dataset-box-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .dataset-label {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .dataset-count {
+            font-size: 24px;
+            font-weight: bold;
+            color: #e74c3c;
+        }
+        
+        .dataset-summary {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+            line-height: 1.4;
+        }
+        
+        .click-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 10px;
+            background: #ecf0f1;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #7f8c8d;
+            transition: all 0.3s ease;
+        }
+        
+        .click-indicator:hover {
+            background: #bdc3c7;
+            color: #2c3e50;
+        }
+        
+        .process-arrow {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 15px 0;
+            font-size: 16px;
+            color: #7f8c8d;
+            font-weight: 600;
+            position: relative;
+        }
+        
+        .arrow-icon {
+            font-size: 20px;
+            margin-right: 10px;
+        }
+        
+        .reduction-percent {
+            color: #e74c3c;
+            font-weight: bold;
+            margin-left: 5px;
+        }
+        
+        .nonredundant-section {
+            background: linear-gradient(135deg, #fff5ee 0%, #ffeaa7 100%);
+            border-radius: 15px;
+            padding: 30px;
+            margin: 40px 0;
+            border: 2px solid #fdcb6e;
+        }
+        
+        .nonredundant-title {
+            font-size: 24px;
+            font-weight: bold;
+            color: #8b4513;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .nonredundant-content {
+            color: #8b4513;
+            line-height: 1.6;
+            font-size: 14px;
+        }
+        
+        .code-block {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            margin: 15px 0;
+            line-height: 1.6;
+        }
+        
+        .detail-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            backdrop-filter: blur(5px);
+        }
+        
+        .detail-content {
+            background: white;
+            max-width: 800px;
+            max-height: 80vh;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.3);
+            animation: modalSlideIn 0.3s ease;
+        }
+        
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-50px) scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+        
+        .detail-header {
+            padding: 25px;
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .dataset3-detail-header {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+        }
+        
+        .dataset4-detail-header {
+            background: linear-gradient(135deg, #27ae60 0%, #229954 100%);
+        }
+        
+        .close-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 5px;
+            transition: background 0.3s ease;
+        }
+        
+        .close-btn:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        
+        .detail-body {
+            padding: 30px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        
+        .tech-section {
+            margin-bottom: 25px;
+        }
+        
+        .tech-title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 5px;
+        }
+        
+        .tech-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .tech-label {
+            font-weight: 600;
+            color: #34495e;
+        }
+        
+        .tech-value {
+            color: #7f8c8d;
+            font-family: 'Courier New', monospace;
+            background: #f8f9fa;
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+        
+        .card-content {
+            color: #7f8c8d;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+        
+        .highlight {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 14px;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-content">
+                <div class="title">Interactive SAD Methodology Explorer</div>
+                <div class="subtitle">Spectral Analysis of Distributions: Dataset 3 vs Dataset 4 Comparison</div>
+                <div class="instruction">
+                    Click on any dataset box below to explore detailed technical specifications, code implementations, and methodological decisions
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <!-- Summary Table -->
+            <div class="summary-section">
+                <div class="summary-title">Dataset Summary & Key Statistics</div>
+                <table class="summary-table">
+                    <thead>
+                        <tr>
+                            <th>Dataset</th>
+                            <th>Total Proteins</th>
+                            <th>Non-redundant</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="dataset-number">Dataset 3</td>
+                            <td class="total-proteins">27,600</td>
+                            <td class="non-redundant">14,881</td>
+                        </tr>
+                        <tr>
+                            <td class="dataset-number">Dataset 4</td>
+                            <td class="total-proteins">20,252</td>
+                            <td class="non-redundant">12,378</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Dataset Comparison -->
+            <div class="methodology-overview">
+                <!-- Dataset 3 -->
+                <div class="dataset-column dataset3-column">
+                    <div class="dataset-header dataset3-header">
+                        Dataset 3: Comprehensive UniProt Query<br>
+                        <small style="font-weight: normal; font-size: 14px;">Web Interface Retrieval Strategy</small>
+                    </div>
+                    
+                    <div class="dataset-container">
+                        <div class="dataset-box dataset3-dataset" onclick="showDetails('dataset3')">
+                            <div class="dataset-box-header">
+                                <div class="dataset-label">Raw Data Acquisition</div>
+                                <div class="dataset-count">27,600</div>
+                            </div>
+                            <div class="dataset-summary">
+                                Comprehensive eukaryotic enzyme retrieval using UniProt web interface with quality criteria targeting maximum coverage
+                            </div>
+                            <div class="click-indicator">
+                                🔍 Click for query specifications
+                            </div>
+                        </div>
+                        
+                        <div class="process-arrow">
+                            <span class="arrow-icon">⬇</span>
+                            Length Filtering (50-600aa)
+                            <span class="reduction-percent">(-31.3%)</span>
+                        </div>
+                        
+                        <div class="dataset-box dataset3-dataset" onclick="showDetails('dataset3_length')">
+                            <div class="dataset-box-header">
+                                <div class="dataset-label">Length-Filtered Dataset</div>
+                                <div class="dataset-count">18,985</div>
+                            </div>
+                            <div class="dataset-summary">
+                                Proteins within 50-600 amino acid range, excluding fragments and unusually large proteins for focused analysis
+                            </div>
+                            <div class="click-indicator">
+                                🔍 Click for filtering details
+                            </div>
+                        </div>
+                        
+                        <div class="process-arrow">
+                            <span class="arrow-icon">⬇</span>
+                            Protein Name-Based Redundancy Removal
+                            <span class="reduction-percent">(-21.6%)</span>
+                        </div>
+                        
+                        <div class="dataset-box dataset3-dataset" onclick="showDetails('dataset3_final')">
+                            <div class="dataset-box-header">
+                                <div class="dataset-label">Non-Redundant Dataset</div>
+                                <div class="dataset-count">14,881</div>
+                            </div>
+                            <div class="dataset-summary">
+                                Conservative protein name-based filtering retaining longest variants for unique functional representation
+                            </div>
+                            <div class="click-indicator">
+                                🔍 Click for processing details
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Dataset 4 -->
+                <div class="dataset-column dataset4-column">
+                    <div class="dataset-header dataset4-header">
+                        Dataset 4: DECIPHER Clustering Approach<br>
+                        <small style="font-weight: normal; font-size: 14px;">Sequence-Based Redundancy Removal</small>
+                    </div>
+                    
+                    <div class="dataset-container">
+                        <div class="dataset-box dataset4-dataset" onclick="showDetails('dataset4')">
+                            <div class="dataset-box-header">
+                                <div class="dataset-label">Clustered Representatives</div>
+                                <div class="dataset-count">20,252</div>
+                            </div>
+                            <div class="dataset-summary">
+                                85% identity clustering applied to comprehensive dataset using DECIPHER three-phase algorithm
+                            </div>
+                            <div class="click-indicator">
+                                🔍 Click for clustering algorithm
+                            </div>
+                        </div>
+                        
+                        <div class="process-arrow">
+                            <span class="arrow-icon">⬇</span>
+                            Length Filtering (50-600aa)
+                            <span class="reduction-percent">(-31.0%)</span>
+                        </div>
+                        
+                        <div class="dataset-box dataset4-dataset" onclick="showDetails('dataset4_length')">
+                            <div class="dataset-box-header">
+                                <div class="dataset-label">Length-Filtered Dataset</div>
+                                <div class="dataset-count">13,980</div>
+                            </div>
+                            <div class="dataset-summary">
+                                Clustered representatives within 50-600 amino acid range for standardized length analysis
+                            </div>
+                            <div class="click-indicator">
+                                🔍 Click for filtering details
+                            </div>
+                        </div>
+                        
+                        <div class="process-arrow">
+                            <span class="arrow-icon">⬇</span>
+                            Protein Name-Based Redundancy Removal
+                            <span class="reduction-percent">(-11.5%)</span>
+                        </div>
+                        
+                        <div class="dataset-box dataset4-dataset" onclick="showDetails('dataset4_final')">
+                            <div class="dataset-box-header">
+                                <div class="dataset-label">Non-Redundant Dataset</div>
+                                <div class="dataset-count">12,378</div>
+                            </div>
+                            <div class="dataset-summary">
+                                Protein name-based filtering applied to clustered representatives ensuring unique functional coverage
+                            </div>
+                            <div class="click-indicator">
+                                🔍 Click for final processing details
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Detail Panels -->
+    <div id="detail-panel" class="detail-panel" onclick="hideDetails(event)">
+        <div class="detail-content" onclick="event.stopPropagation()">
+            <div id="detail-header" class="detail-header">
+                <span id="detail-title">Dataset Details</span>
+                <button class="close-btn" onclick="hideDetails()">&times;</button>
+            </div>
+            <div id="detail-body" class="detail-body">
+                <!-- Content will be dynamically inserted here -->
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const detailData = {
+            dataset3: {
+                title: "Dataset 3: Comprehensive UniProt Query",
+                headerClass: "dataset3-detail-header",
+                content: `
+                    <div class="tech-section">
+                        <div class="tech-title">Query Specification</div>
+                        <div class="tech-grid">
+                            <div class="tech-label">Target Taxonomy:</div>
+                            <div class="tech-value">Eukaryota (taxonomy_id: 2759)</div>
+                            <div class="tech-label">Review Status:</div>
+                            <div class="tech-value">reviewed:true</div>
+                            <div class="tech-label">Evidence Level:</div>
+                            <div class="tech-value">Evidence at protein level</div>
+                            <div class="tech-label">Enzyme Requirement:</div>
+                            <div class="tech-value">EC number present</div>
+                            <div class="tech-label">Output Format:</div>
+                            <div class="tech-value">Tabular with selected fields</div>
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Quality Control Approach</div>
+                        <div class="code-block">Search Criteria:
+- Taxonomy [OC]: Eukaryota (eukaryotes) [2759]
+- Enzyme classification [EC]: * (any EC number)
+- Reviewed: Yes
+- Protein Existence [PE]: Evidence at protein level
+
+Fields Retrieved:
+- Entry, Entry Name, Organism, EC number
+- Length, Protein names, Sequence</div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Output File</div>
+                        <div class="card-content">
+                            <strong>Dataset File:</strong> uniprotkb_taxonomy_id_2759_AND_ec_AND_r_2025_06_27.csv
+                        </div>
+                    </div>
+                    
+                    <div class="highlight">
+                        <strong>Strategic Approach:</strong> Captures maximum eukaryotic enzyme diversity without taxonomic bias control, providing comprehensive coverage for robust periodicity analysis.
+                    </div>
+                `
+            },
+            
+            dataset3_length: {
+                title: "Dataset 3: Length-Filtered Dataset",
+                headerClass: "dataset3-detail-header",
+                content: `
+                    <div class="tech-section">
+                        <div class="tech-title">Length Filtering Parameters</div>
+                        <div class="tech-grid">
+                            <div class="tech-label">Input Dataset:</div>
+                            <div class="tech-value">27,600 proteins</div>
+                            <div class="tech-label">Length Range:</div>
+                            <div class="tech-value">50-600 amino acids</div>
+                            <div class="tech-label">Output Count:</div>
+                            <div class="tech-value">18,985 proteins</div>
+                            <div class="tech-label">Proteins Removed:</div>
+                            <div class="tech-value">8,615 proteins (31.3%)</div>
+                            <div class="tech-label">Retention Rate:</div>
+                            <div class="tech-value">68.7% of original dataset</div>
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Filtering Rationale</div>
+                        <div class="card-content">
+                            The 50-600 amino acid range excludes protein fragments (< 50aa) and unusually large proteins (> 600aa) that may represent multi-domain proteins or annotation artifacts. This standardized length range ensures focus on typical single-domain proteins where periodicity patterns are most clearly observable and statistically meaningful.
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">R Implementation</div>
+                        <div class="code-block"># Filter proteins by length range
+filtered_proteins <- proteins %>%
+  filter(length_aa >= 50 & length_aa <= 600)
+
+# Summary statistics
+cat("Original dataset:", nrow(proteins), "proteins\\n")
+cat("After length filtering:", nrow(filtered_proteins), "proteins\\n")
+cat("Reduction:", round((1 - nrow(filtered_proteins)/nrow(proteins)) * 100, 1), "%\\n")</div>
+                    </div>
+                    
+                    <div class="highlight">
+                        <strong>Impact:</strong> Removes 31.3% of proteins that fall outside the standard analysis range, creating a more homogeneous dataset for periodicity detection.
+                    </div>
+                `
+            },
+            
+            dataset3_final: {
+                title: "Dataset 3: Non-Redundant Processing",
+                headerClass: "dataset3-detail-header",
+                content: `
+                    <div class="tech-section">
+                        <div class="tech-title">Redundancy Removal Parameters</div>
+                        <div class="tech-grid">
+                            <div class="tech-label">Input Dataset:</div>
+                            <div class="tech-value">18,985 length-filtered sequences</div>
+                            <div class="tech-label">Grouping Criteria:</div>
+                            <div class="tech-value">protein_name_std (standardized names)</div>
+                            <div class="tech-label">Selection Rule:</div>
+                            <div class="tech-value">slice_max(length_aa) - longest variant</div>
+                            <div class="tech-label">Final Count:</div>
+                            <div class="tech-value">14,881 non-redundant proteins</div>
+                            <div class="tech-label">Reduction Rate:</div>
+                            <div class="tech-value">21.6% redundancy removed</div>
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Processing Methodology</div>
+                        <div class="card-content">
+                            Applied the Kolker et al. 2002 approach by grouping proteins with identical standardized names and retaining only the longest variant. This conservative strategy ensures each unique protein function is represented once, eliminating bias from overrepresented protein families while preserving maximum functional diversity.
+                        </div>
+                    </div>
+                    
+                    <div class="nonredundant-section">
+                        <div class="nonredundant-title">Non-Redundancy Definition</div>
+                        <div class="nonredundant-content">
+                            <p><strong>Theoretical Foundation:</strong> Kolker et al. OMICS 2002 study addressed potential bias from overrepresented protein families by creating a non-redundant UniProt sequence dataset.</p>
+                            
+                            <p><strong>Methodological Approach:</strong> The following R Scripts strive to follow the paper's SAD and Statistical Mixture Modeling protocol, we remove all proteins with identical descriptions, retaining only the longest variant. This conservative approach ensures that each unique protein function is represented only once, providing a more robust test of genuine length periodicity.</p>
+                            
+                            <div class="code-block"># Function to create non-redundant dataset
+create_nonredundant_dataset <- function(proteins) {
+  # Analyze redundancy based on protein names
+  redundancy_summary <- proteins %>%
+    group_by(protein_name_std) %>%
+    summarise(
+      count = n(),
+      min_length = min(length_aa, na.rm = TRUE),
+      max_length = max(length_aa, na.rm = TRUE),
+      length_variants = n_distinct(length_aa),
+      organism_count = n_distinct(organism_name, na.rm = TRUE),
+      .groups = 'drop'
+    )
+    
+  # Create non-redundant dataset by keeping longest variant
+  nonredundant_proteins <- proteins %>%
+    group_by(protein_name_std) %>%
+    slice_max(length_aa, with_ties = FALSE) %>%
+    ungroup()
+    
+  return(list(
+    nonredundant = nonredundant_proteins,
+    redundancy_summary = redundancy_summary
+  ))
+}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="highlight">
+                        <strong>Quality Assurance:</strong> 14,881 unique protein functions provide robust statistical power for detecting intrinsic biological properties in length periodicity analysis.
+                    </div>
+                `
+            },
+            
+            dataset4: {
+                title: "Dataset 4: DECIPHER Clustering Implementation",
+                headerClass: "dataset4-detail-header",
+                content: `
+                    <div class="tech-section">
+                        <div class="tech-title">Three-Phase Clustering Algorithm</div>
+                        <div class="code-block">clusters <- Clusterize(proteins, 
+                         cutoff = 0.15,        # 85% identity threshold
+                         processors = 4,       # Multi-core processing
+                         verbose = TRUE)       # Progress monitoring
+
+# Phase 1: k-mer Partitioning
+# Groups sequences by shared k-mers for efficient comparison
+
+# Phase 2: Relatedness Sorting  
+# Orders sequences by similarity using radix sorting
+
+# Phase 3: Distance-based Clustering
+# Sequential clustering with distance cutoff</div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Algorithm Parameters</div>
+                        <div class="tech-grid">
+                            <div class="tech-label">Identity Cutoff:</div>
+                            <div class="tech-value">85% (0.15 distance)</div>
+                            <div class="tech-label">Processing Cores:</div>
+                            <div class="tech-value">4 parallel processors</div>
+                            <div class="tech-label">Input Sequences:</div>
+                            <div class="tech-value">27,600 proteins</div>
+                            <div class="tech-label">Cluster Representatives:</div>
+                            <div class="tech-value">20,252 sequences</div>
+                            <div class="tech-label">Sequence Reduction:</div>
+                            <div class="tech-value">26.6% redundancy removed</div>
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Final Output Files</div>
+                        <div class="tech-grid">
+                            <div class="tech-label">Original File:</div>
+                            <div class="tech-value">filtered_enzyme_dataset.csv</div>
+                            <div class="tech-label">Renamed File:</div>
+                            <div class="tech-value">filtered_enzyme_dataset_clusterize85.csv</div>
+                        </div>
+                    </div>
+                    
+                    <div class="highlight">
+                        <strong>Methodological Advantage:</strong> Sequence-based clustering preserves functional diversity while removing true sequence redundancy, providing sophisticated pre-processing for non-redundancy analysis.
+                    </div>
+                `
+            },
+            
+            dataset4_length: {
+                title: "Dataset 4: Length-Filtered Dataset",
+                headerClass: "dataset4-detail-header",
+                content: `
+                    <div class="tech-section">
+                        <div class="tech-title">Length Filtering Parameters</div>
+                        <div class="tech-grid">
+                            <div class="tech-label">Input Dataset:</div>
+                            <div class="tech-value">20,252 clustered representatives</div>
+                            <div class="tech-label">Length Range:</div>
+                            <div class="tech-value">50-600 amino acids</div>
+                            <div class="tech-label">Output Count:</div>
+                            <div class="tech-value">13,980 proteins</div>
+                            <div class="tech-label">Proteins Removed:</div>
+                            <div class="tech-value">6,272 proteins (31.0%)</div>
+                            <div class="tech-label">Retention Rate:</div>
+                            <div class="tech-value">69.0% of clustered dataset</div>
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Filtering Rationale</div>
+                        <div class="card-content">
+                            Applied the same 50-600 amino acid range filter to the clustered representatives. This ensures consistency with Dataset 3's length filtering approach while maintaining the sequence-based redundancy removal achieved through DECIPHER clustering. The standardized length range enables direct comparison between the two methodological approaches.
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">R Implementation</div>
+                        <div class="code-block"># Filter clustered proteins by length range
+filtered_clustered <- clustered_proteins %>%
+  filter(length_aa >= 50 & length_aa <= 600)
+
+# Summary statistics
+cat("Clustered dataset:", nrow(clustered_proteins), "proteins\\n")
+cat("After length filtering:", nrow(filtered_clustered), "proteins\\n")
+cat("Reduction:", round((1 - nrow(filtered_clustered)/nrow(clustered_proteins)) * 100, 1), "%\\n")</div>
+                    </div>
+                    
+                    <div class="highlight">
+                        <strong>Impact:</strong> Removes 31.0% of clustered representatives, nearly identical to Dataset 3's reduction rate, confirming consistent length distribution across both datasets.
+                    </div>
+                `
+            },
+            
+            dataset4_final: {
+                title: "Dataset 4: Final Non-Redundant Processing",
+                headerClass: "dataset4-detail-header",
+                content: `
+                    <div class="tech-section">
+                        <div class="tech-title">Triple-Stage Redundancy Removal</div>
+                        <div class="tech-grid">
+                            <div class="tech-label">Stage 1 - Clustering:</div>
+                            <div class="tech-value">27,600 → 20,252 (sequence-based)</div>
+                            <div class="tech-label">Stage 2 - Length Filter:</div>
+                            <div class="tech-value">20,252 → 13,980 (50-600aa range)</div>
+                            <div class="tech-label">Stage 3 - Protein Names:</div>
+                            <div class="tech-value">13,980 → 12,378 (name-based)</div>
+                            <div class="tech-label">Combined Reduction:</div>
+                            <div class="tech-value">55.2% total redundancy removed</div>
+                            <div class="tech-label">Final Unique Functions:</div>
+                            <div class="tech-value">12,378 non-redundant proteins</div>
+                        </div>
+                    </div>
+                    
+                    <div class="tech-section">
+                        <div class="tech-title">Processing Strategy</div>
+                        <div class="card-content">
+                            Applied the identical non-redundancy R script to the length-filtered, DECIPHER-clustered representatives. This triple-stage approach first removes sequence redundancy through sophisticated clustering, then applies length filtering for standardization, and finally removes protein name-based redundancy following Kolker et al. methodology. The result is the most stringently filtered dataset with maximum elimination of both sequence and functional redundancy.
+                        </div>
+                    </div>
+                    
+                    <div class="nonredundant-section">
+                        <div class="nonredundant-title">Non-Redundancy Definition</div>
+                        <div class="nonredundant-content">
+                            <p><strong>Theoretical Foundation:</strong> Kolker et al. OMICS 2002 study addressed potential bias from overrepresented protein families by creating a non-redundant UniProt sequence dataset.</p>
+                            
+                            <p><strong>Methodological Approach:</strong> The following R Scripts strive to follow the paper's SAD and Statistical Mixture Modeling protocol, we remove all proteins with identical descriptions, retaining only the longest variant. This conservative approach ensures that each unique protein function is represented only once, providing a more robust test of genuine length periodicity.</p>
+                            
+                            <div class="code-block"># Function to create non-redundant dataset
+create_nonredundant_dataset <- function(proteins) {
+  # Analyze redundancy based on protein names
+  redundancy_summary <- proteins %>%
+    group_by(protein_name_std) %>%
+    summarise(
+      count = n(),
+      min_length = min(length_aa, na.rm = TRUE),
+      max_length = max(length_aa, na.rm = TRUE),
+      length_variants = n_distinct(length_aa),
+      organism_count = n_distinct(organism_name, na.rm = TRUE),
+      .groups = 'drop'
+    )
+    
+  # Create non-redundant dataset by keeping longest variant
+  nonredundant_proteins <- proteins %>%
+    group_by(protein_name_std) %>%
+    slice_max(length_aa, with_ties = FALSE) %>%
+    ungroup()
+    
+  return(list(
+    nonredundant = nonredundant_proteins,
+    redundancy_summary = redundancy_summary
+  ))
+}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="highlight">
+                        <strong>Analytical Power:</strong> 12,378 unique, non-redundant protein functions provide the cleanest dataset for detecting intrinsic biological properties while maintaining statistical robustness.
+                    </div>
+                `
+            }
+        };
+        
+        function showDetails(datasetId) {
+            const panel = document.getElementById('detail-panel');
+            const header = document.getElementById('detail-header');
+            const title = document.getElementById('detail-title');
+            const body = document.getElementById('detail-body');
+            
+            const data = detailData[datasetId];
+            if (data) {
+                title.textContent = data.title;
+                header.className = 'detail-header ' + data.headerClass;
+                body.innerHTML = data.content;
+                panel.style.display = 'flex';
+                document.body.style.overflow = 'hidden';
+            }
+        }
+        
+        function hideDetails(event) {
+            if (!event || event.target.id === 'detail-panel' || event.target.className === 'close-btn') {
+                document.getElementById('detail-panel').style.display = 'none';
+                document.body.style.overflow = 'auto';
+            }
+        }
+        
+        // Add keyboard support
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                hideDetails();
+            }
+        });
+    </script>
+</body>
+</html>

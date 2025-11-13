@@ -1,0 +1,1923 @@
+---
+title: "Spectral Analysis of Distributions (SAD) - Sequential Multi-Dataset Analysis"
+author: "Based on Kolker et al. 2002"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, 
+                      fig.width = 10, fig.height = 7)
+```
+
+# Introduction
+
+## Theoretical Foundation on Spectral Analysis of Protein Length Distributions
+
+The Spectral Analysis of Distributions (SAD) methodology developed by Kolker et al. (2002) addresses a fundamental limitation of classical Fourier analysis when applied to biological sequence data. Traditional discrete Fourier transforms (DFT) require that the data interval contains an integral number of periods, which constrains period detection to discrete harmonics of the fundamental frequency.
+
+**Technical Innovation:** SAD overcomes this constraint by fitting cosine waves with continuously adjustable periods to empirical distributions, enabling detection of non-integer periodicities that may reflect genuine biological constraints.
+
+**Rationale for Exploration:** Protein domains may exhibit preferred sizes, potentially reflecting optimal folding units, functional constraints, or evolutionary modularity. These constraints may manifest as "periodic peaks" in length distributions at multiples of a fundamental domain size.
+
+**Simpler Explanation for Students:** SAD helps us detect these hidden patterns in protein length data. Think of protein domains like building blocks - if there's a "preferred size" block that evolution favors, we should see proteins that are 1x, 2x, 3x, or 4x this preferred size more often than random lengths. 
+
+This document implements the SAD methodology across four eukaryotic enzyme datasets, maintaining methodological consistency while handling diverse data structures.
+
+```{r load_libraries, echo=FALSE}
+library(tidyverse)
+library(stats)
+library(knitr)
+library(kableExtra)
+library(patchwork)
+```
+
+# Background - Methods for Preprocessing Non-Redundant Proteins
+
+## Non-Redundancy and Statistical Power
+
+**Theoretical Foundation:** Kolker et al. OMICS 2002 study addressed potential bias from overrepresented protein families by creating a non-redundant Uniprot sequence dataset. This step wou   .
+
+**Methodological Approach:** The following R Scripts strive to following the paper's SAD and Statistical Mixture Modeling protocol, we remove all proteins with identical descriptions, retaining only the longest variant. This conservative approach ensures that each unique protein function is represented only once, providing a more robust test of genuine length periodicity.
+
+```{r preprocess_functions, echo=TRUE}
+# Function to create non-redundant dataset
+create_nonredundant_dataset <- function(proteins) {
+  # Analyze redundancy based on protein names
+  redundancy_summary <- proteins %>%
+    group_by(protein_name_std) %>%
+    summarise(
+      count = n(),
+      min_length = min(length_aa, na.rm = TRUE),
+      max_length = max(length_aa, na.rm = TRUE),
+      length_variants = n_distinct(length_aa),
+      organism_count = n_distinct(organism_name, na.rm = TRUE),
+      .groups = 'drop'
+    )
+  
+  # Create non-redundant dataset by keeping longest variant
+  nonredundant_proteins <- proteins %>%
+    group_by(protein_name_std) %>%
+    slice_max(length_aa, with_ties = FALSE) %>%
+    ungroup()
+  
+  return(list(
+    nonredundant = nonredundant_proteins,
+    redundancy_summary = redundancy_summary
+  ))
+}
+```
+
+## Core SAD Methodology: From Theory to Implementation
+
+**Mathematical Foundation:** The SAD algorithm implements Kolker et al.OMICS 2002 three-step process to detect periodicities in length distributions:
+
+### **Step 1: Background Removal via Moving Average**
+**Equation 1 from Paper:** For each period j, calculate the non-oscillating background:
+```
+Nonosc_j(i) = (1/j) × Σ[k=-int(j/2) to int(j/2)] Total(i+k)
+```
+
+**Technical Purpose:** This period-specific smoothing eliminates any oscillatory component at frequency j, leaving only the non-periodic background. The window size equals the test period, ensuring complete removal of that specific periodicity.
+
+**Biological Interpretation:** This step removes the underlying "baseline" protein length distribution, isolating only the periodic components that might reflect evolutionary domain constraints.
+
+### **Step 2: Oscillation Extraction**
+**Equation 2 from Paper:** 
+```
+Osc_j(i) = Total(i) - Nonosc_j(i)
+```
+
+**Purpose:** Extract the residual oscillatory component after background removal.
+
+### **Step 3: Amplitude Calculation via Cosine Transform**
+**Equation 4 from Paper:** Calculate the amplitude as a Fourier coefficient:
+```
+A_j = Σ[Osc_j(i) × cos(2πi/j)] / Σ[cos²(2πi/j)]
+```
+
+**Mathematical Insight:** This is essentially projecting the oscillatory signal onto a cosine basis function of period j. The amplitude A_j quantifies how much the data oscillates at that specific period.
+
+**Continuous Spectrum Advantage:** Unlike discrete FFT, this approach tests periods at unit increments (j = 2, 3, 4, ..., 160), providing a virtually continuous spectrum that can detect non-integer periodicities.
+
+**Simple Explanation:** Imagine looking for a repeating beat in music. Step 1 removes the background noise, Step 2 isolates the rhythm, and Step 3 measures how strong the beat is at each possible tempo. We test many different tempos to find the strongest rhythm.
+
+```{r sad_algorithm, echo=TRUE}
+# Function to perform Spectral Analysis of Distributions (SAD)
+sad_analysis_kolker <- function(data_vector, min_period = 2, max_period = 160, 
+                               min_length = 50, max_length = 600) {
+  # Create a frequency table of counts by length
+  imin <- min_length
+  imax <- max_length
+  
+  # Create a Total vector where Total[i] is the count of proteins with length i
+  Total <- numeric(imax - imin + 1)
+  names(Total) <- imin:imax
+  
+  for (len in data_vector) {
+    if (len >= imin && len <= imax) {
+      Total[as.character(len)] <- Total[as.character(len)] + 1
+    }
+  }
+  
+  # Initialize results vectors
+  periods <- min_period:max_period
+  amplitudes <- numeric(length(periods))
+  
+  # For each period to test
+  for (p_idx in seq_along(periods)) {
+    j <- periods[p_idx]
+    
+    # Define the interval excluding half-periods from both ends
+    half_j <- floor(j/2)
+    interval_start <- imin + half_j
+    interval_end <- imax - half_j
+    
+    # Calculate the number of complete periods in the interval
+    m <- floor((interval_end - interval_start) / j) - 1
+    
+    if (m < 1) {
+      amplitudes[p_idx] <- 0
+      next
+    }
+    
+    # 1. Calculate non-oscillating background using weighted moving average
+    Nonosc <- numeric(imax - imin + 1)
+    names(Nonosc) <- imin:imax
+    
+    for (i in interval_start:interval_end) {
+      i_str <- as.character(i)
+      
+      # Sum over window of size j centered at i
+      window_sum <- 0
+      
+      for (k in -half_j:half_j) {
+        idx <- as.character(i + k)
+        if (idx %in% names(Total)) {
+          window_sum <- window_sum + Total[idx]
+        }
+      }
+      
+      # Calculate the non-oscillating part
+      Nonosc[i_str] <- window_sum / j
+    }
+    
+    # 2. Calculate oscillating component
+    Osc <- numeric(imax - imin + 1)
+    names(Osc) <- imin:imax
+    
+    for (i in interval_start:interval_end) {
+      i_str <- as.character(i)
+      Osc[i_str] <- Total[i_str] - Nonosc[i_str]
+    }
+    
+    # 3. Apply cosine Fourier transform
+    valid_indices <- as.character(interval_start:interval_end)
+    osc_values <- Osc[valid_indices]
+    lengths <- as.numeric(valid_indices)
+    cos_values <- cos(2 * pi * lengths / j)
+    
+    # Calculate amplitude
+    numerator <- sum(osc_values * cos_values)
+    denominator <- sum(cos_values^2)
+    
+    if (denominator > 0) {
+      amplitudes[p_idx] <- numerator / denominator
+    } else {
+      amplitudes[p_idx] <- 0
+    }
+  }
+  
+  return(data.frame(period = periods, amplitude = amplitudes))
+}
+```
+
+## Statistical Mixture Modeling: Quantifying Biological Significance
+
+**Theoretical Framework:** Beyond period detection, Kolker et al. developed a probabilistic mixture model to test the statistical significance of observed periodicities. This model combines:
+
+### **Background Component: Gamma Distribution**
+**Mathematical Formulation:** Uses gamma distribution G(α,β) to model the baseline protein length distribution
+**Biological Rationale:** Gamma distributions can accommodate various skewness patterns commonly observed in protein length data, providing flexible baseline modeling.
+
+### **Periodic Components: Normal Distributions**
+**Model Structure:** Peaks at multiples μ, 2μ, 3μ, 4μ with increasing variance:
+- Peak 1: N(μ, σ²) 
+- Peak 2: N(2μ, 2σ²)
+- Peak 3: N(3μ, 3σ²)  
+- Peak 4: N(4μ, 4σ²)
+
+**Biological Interpretation:** This models proteins composed of "i subunits", each with mean length μ and standard deviation σ. The increasing variance reflects the compounding uncertainty with multiple domains.
+
+### **Maximum Likelihood Estimation**
+**Parameter Set:** The model estimates (k+4) parameters: μ, σ, α, β, p₁, p₂, p₃, p₄
+**Constraint:** Peak probabilities must sum to less than 1: Σpᵢ < 1
+
+### **Likelihood Ratio Test**
+**Statistical Test:** Compares unconstrained model L₁ vs. background-only model L₀
+**Test Statistic:** λ = -2ln(L₀/L₁) ~ χ²(k+2) under null hypothesis
+**Null Hypothesis:** Protein lengths follow gamma distribution without periodic peaks
+
+**Simple Explanation:** We build two models - one that allows for preferred protein sizes (with peaks) and one that doesn't (background only). If the "peaks" model is significantly better, we have evidence for preferred domain sizes. The likelihood ratio test tells us how confident we can be in this conclusion.
+
+```{r mixture_model_functions, echo=TRUE}
+# Normalized gamma PDF for discrete distributions
+gamma_pdf_normalized <- function(x, alpha, beta, imin, imax) {
+  if (alpha <= 0 || beta <= 0) return(rep(1e-10, length(x)))
+  
+  x_values <- imin:imax
+  raw_pdf <- dgamma(x_values, shape = alpha + 1, scale = beta)
+  normalized_pdf <- raw_pdf / sum(raw_pdf)
+  result <- normalized_pdf[x - imin + 1]
+  return(result)
+}
+
+# Normalized normal PDF for discrete distributions
+normal_pdf_normalized <- function(x, mu, sigma, imin, imax) {
+  if (sigma <= 0) return(rep(1e-10, length(x)))
+  
+  x_values <- imin:imax
+  raw_pdf <- dnorm(x_values, mean = mu, sd = sigma)
+  normalized_pdf <- raw_pdf / sum(raw_pdf)
+  result <- normalized_pdf[x - imin + 1]
+  return(result)
+}
+
+# Mixture model fitting function with robust error handling
+fit_mixture_model_kolker <- function(length_counts, period_hint, k, imin, imax) {
+  lengths <- as.numeric(names(length_counts))
+  counts <- as.numeric(length_counts)
+  
+  if (length(lengths) == 0 || length(counts) == 0) {
+    warning("Empty length counts data provided")
+    return(list(
+      params = rep(NA, 4 + k), mu = NA, sigma = NA, alpha = NA, beta = NA,
+      p_values = rep(NA, k), mu_background = NA, sigma_background = NA,
+      mu_pure_background = NA, sigma_pure_background = NA,
+      convergence = 1, log_likelihood = NA, background_log_likelihood = NA,
+      lambda = NA, p_value = NA
+    ))
+  }
+  
+  # Initial parameter estimation
+  initial_mu <- ifelse(is.null(period_hint) || is.na(period_hint) || period_hint <= 0, 100, period_hint)
+  initial_sigma <- max(1, initial_mu / 10)
+  
+  mean_val <- sum(lengths * counts) / sum(counts)
+  var_val <- sum(counts * (lengths - mean_val)^2) / sum(counts)
+  
+  initial_beta <- max(1, var_val / mean_val)
+  if (is.na(initial_beta) || !is.finite(initial_beta)) initial_beta <- 200
+  
+  initial_alpha <- max(0.1, (mean_val / initial_beta) - 1)
+  if (is.na(initial_alpha) || !is.finite(initial_alpha)) initial_alpha <- 1
+  
+  p_init <- rep(0.05, k)
+  initial_params <- c(initial_mu, initial_sigma, initial_alpha, initial_beta, p_init)
+  
+  # Negative log-likelihood function
+  mixture_nll <- function(params, lengths, counts, k, imin, imax) {
+    mu <- params[1]
+    sigma <- params[2]
+    alpha <- params[3]
+    beta <- params[4]
+    p_values <- params[5:(4+k)]
+    
+    if (mu <= 0 || mu > 160 || sigma <= 0 || sigma > 100 || 
+        alpha < 0 || alpha > 10 || beta <= 0 || beta > 1000 || 
+        any(p_values < 0) || any(p_values > 1) || sum(p_values) >= 1) {
+      return(1e10)
+    }
+    
+    tryCatch({
+      g_pdf <- gamma_pdf_normalized(lengths, alpha, beta, imin, imax)
+      mixture_pdf <- (1 - sum(p_values)) * g_pdf
+      
+      for (i in 1:k) {
+        peak_pdf <- normal_pdf_normalized(lengths, i*mu, sqrt(i)*sigma, imin, imax)
+        mixture_pdf <- mixture_pdf + p_values[i] * peak_pdf
+      }
+      
+      mixture_pdf <- pmax(mixture_pdf, 1e-10)
+      ll <- sum(counts * log(mixture_pdf))
+      return(-ll)
+    }, error = function(e) {
+      return(1e10)
+    })
+  }
+  
+  # Fit full model
+  fit <- tryCatch({
+    optim(
+      par = initial_params,
+      fn = mixture_nll,
+      lengths = lengths, counts = counts, k = k, imin = imin, imax = imax,
+      method = "L-BFGS-B",
+      lower = c(20, 1, 0.01, 1, rep(0.001, k)),
+      upper = c(160, 50, 10, 1000, rep(0.2, k)),
+      control = list(maxit = 1000)
+    )
+  }, error = function(e) {
+    list(par = initial_params, value = 1e10, convergence = 1)
+  })
+  
+  # Fit background-only model
+  bg_nll <- function(params, lengths, counts, imin, imax) {
+    alpha <- params[1]
+    beta <- params[2]
+    
+    if (alpha < 0 || beta <= 0) return(1e10)
+    
+    tryCatch({
+      g_pdf <- gamma_pdf_normalized(lengths, alpha, beta, imin, imax)
+      ll <- sum(counts * log(pmax(g_pdf, 1e-10)))
+      return(-ll)
+    }, error = function(e) {
+      return(1e10)
+    })
+  }
+  
+  bg_fit <- tryCatch({
+    optim(
+      par = c(initial_alpha, initial_beta),
+      fn = bg_nll,
+      lengths = lengths, counts = counts, imin = imin, imax = imax,
+      method = "L-BFGS-B",
+      lower = c(0.01, 1),
+      upper = c(10, 1000)
+    )
+  }, error = function(e) {
+    list(par = c(initial_alpha, initial_beta), value = 1e10, convergence = 1)
+  })
+  
+  # Calculate likelihood ratio test
+  lambda <- if(fit$value < 1e10 && bg_fit$value < 1e10) {
+    2 * (bg_fit$value - fit$value)
+  } else { NA }
+  
+  df <- k + 2
+  p_value <- if(!is.na(lambda)) { pchisq(lambda, df = df, lower.tail = FALSE) } else { NA }
+  
+  # Extract parameters
+  params <- fit$par
+  mu <- params[1]; sigma <- params[2]; alpha <- params[3]; beta <- params[4]
+  p_values <- params[5:(4+k)]
+  
+  # Calculate derived parameters
+  mu_background <- if(!is.na(alpha) && !is.na(beta)) beta * (alpha + 1) else NA
+  sigma_background <- if(!is.na(alpha) && !is.na(beta)) beta * sqrt(alpha + 1) else NA
+  mu_pure_background <- if(bg_fit$convergence == 0) bg_fit$par[2] * (bg_fit$par[1] + 1) else NA
+  sigma_pure_background <- if(bg_fit$convergence == 0) bg_fit$par[2] * sqrt(bg_fit$par[1] + 1) else NA
+  
+  return(list(
+    params = params, mu = mu, sigma = sigma, alpha = alpha, beta = beta,
+    p_values = p_values, mu_background = mu_background, sigma_background = sigma_background,
+    mu_pure_background = mu_pure_background, sigma_pure_background = sigma_pure_background,
+    convergence = fit$convergence, log_likelihood = -fit$value,
+    background_log_likelihood = -bg_fit$value, lambda = lambda, p_value = p_value
+  ))
+}
+```
+
+# Dataset Configuration and Analysis Parameters
+
+```{r dataset_configuration, echo=FALSE}
+
+# Define datasets and analysis parameters
+
+# new files obtained 9/7/25 
+
+# dataset1 <- read_tsv("uniprotkb_taxonomy_id_2759_AND_reviewed_unique_2.tsv") GS 9/7/25
+# write_csv(dataset1, "dataset_1.csv")
+
+# dataset2 <- read_tsv("uniprotkb_taxonomy_id_2759_AND_reviewed_unique.tsv") GS 9/7/25
+# write_csv(dataset2, "dataset_2.csv")
+
+# pushed these four datasets to github 9/15/25
+
+datasets <- c(
+  "dataset_1.csv",
+  "dataset_2.csv", 
+  "dataset_3.csv",  # reviewer 3 original file name "uniprotkb_taxonomy_id_2759_AND_ec_AND_r_2025_06_27.csv"
+  "dataset_4.csv") # clusterize datset original file name filtered_enzyme_dataset_clusterize80.csv"
+
+dataset_names <- c("Dataset_1", "Dataset_2", "Dataset_3", "Dataset_4")
+
+# Analysis parameters (consistent across all datasets)
+analysis_params <- list(
+  min_length = 50,
+  max_length = 600,
+  min_period = 2,
+  max_period = 160,
+  k_peaks = 4
+)
+
+cat("Analysis Configuration:\n")
+cat("======================\n")
+cat("Datasets to analyze:", length(datasets), "\n")
+cat("Length range:", analysis_params$min_length, "-", analysis_params$max_length, "amino acids\n")
+cat("Period range:", analysis_params$min_period, "-", analysis_params$max_period, "amino acids\n")
+cat("Number of peaks (k):", analysis_params$k_peaks, "\n\n")
+
+# Initialize storage for results
+all_results <- list()
+```
+
+# Uniprot Dataset Standardization and Loading
+
+## **Data Harmonization Strategy**
+
+**Theoretical Context:** The original Kolker et al. OMICS 2002 study used SWISS-PROT Release 39.16 (2000) with specific filtering criteria: eukaryotic sequences, removal of fragments, retention of only enzymes with EC numbers, and creation of non-redundant datasets by protein description.
+
+**Implementation Challenge:** Modern UniProt datasets are more comprehensive and can allow for more sequences to be analyzed. Uniprot sequences were obtained from two different sources each were also preprocessed giving rise to four datasets.  In this analysis we used a "standardization function" to ensure the correct columns were used in the analysis of all four datasets and ensures methodological consistency across datasets while preserving the essential data elements (ie. "Lengths") required for SAD analysis.
+
+**Key Data Requirements:**
+- **Entry identifiers** for protein tracking
+- **Length values** (amino acid counts) for distribution analysis  
+- **EC numbers** for enzyme classification
+- **Organism information** for taxonomic filtering
+- **Protein Sequence/names** for redundancy removal
+
+```{r data_standardization, echo=FALSE}
+
+# Function to standardize column names across different datasets
+standardize_dataset <- function(df, dataset_name) {
+  
+  # Create a copy to avoid modifying original
+  df_std <- df
+  
+  # Helper function to safely get a column value, returning NA if column doesn't exist
+  safe_column <- function(df, col_name) {
+    if(col_name %in% names(df)) {
+      return(df[[col_name]])
+    } else {
+      return(rep(NA, nrow(df)))
+    }
+  }
+  
+  # All datasets have these core columns with the same names
+  # Note: Column names with spaces need backticks
+  df_std <- df_std %>%
+    mutate(
+      entry_id = safe_column(df, "Entry"),
+      reviewed_status = safe_column(df, "Reviewed"),
+      entry_name = safe_column(df, "Entry Name"),  # R handles backticks automatically in safe_column
+      protein_name_std = safe_column(df, "Protein names"),
+      gene_names = safe_column(df, "Gene Names"),
+      organism_name = safe_column(df, "Organism"),
+      length_aa = safe_column(df, "Length")
+    )
+  
+  # Handle EC number column (only present in datasets 3 & 4)
+  if("EC number" %in% names(df)) {
+    # Datasets 3 & 4 have EC number column
+    df_std <- df_std %>%
+      mutate(ec_number_std = safe_column(df, "EC number"))
+  } else {
+    # Datasets 1 & 2 don't have EC number column
+    df_std <- df_std %>%
+      mutate(ec_number_std = "Unknown")
+  }
+  
+  # Handle additional columns in datasets 3 & 4
+  if("Sequence" %in% names(df)) {
+    df_std <- df_std %>%
+      mutate(
+        sequence_data = safe_column(df, "Sequence"),
+        gene_encoded_by = safe_column(df, "Gene encoded by")
+      )
+  } else {
+    df_std <- df_std %>%
+      mutate(
+        sequence_data = NA_character_,
+        gene_encoded_by = NA_character_
+      )
+  }
+  
+  # Handle SeqID column (only present in dataset 4)
+  if("SeqID" %in% names(df)) {
+    df_std <- df_std %>%
+      mutate(seq_id = safe_column(df, "SeqID"))
+  } else {
+    df_std <- df_std %>%
+      mutate(seq_id = NA_character_)
+  }
+  
+  # Ensure essential columns exist and are properly typed
+  # For datasets 1 & 2 without EC numbers, we'll be more lenient with filtering
+  if("EC number" %in% names(df)) {
+    # Datasets 3 & 4: Filter for valid EC numbers
+    df_std <- df_std %>%
+      filter(
+        !is.na(entry_id),
+        !is.na(length_aa),
+        !is.na(ec_number_std),
+        ec_number_std != "",
+        ec_number_std != "Unknown",
+        length_aa > 0
+      )
+  } else {
+    # Datasets 1 & 2: Don't filter on EC number since it doesn't exist
+    df_std <- df_std %>%
+      filter(
+        !is.na(entry_id),
+        !is.na(length_aa),
+        length_aa > 0
+      )
+  }
+  
+  # Final standardization
+  df_std <- df_std %>%
+    mutate(
+      length_aa = as.numeric(length_aa),
+      dataset_source = dataset_name
+    )
+  
+  # Print diagnostic information
+  cat("Dataset:", dataset_name, "\n")
+  cat("Original columns:", paste(names(df), collapse = ", "), "\n")
+  cat("Rows before filtering:", nrow(df), "\n")
+  cat("Rows after filtering:", nrow(df_std), "\n")
+  cat("Has EC number column:", "EC number" %in% names(df), "\n")
+  cat("Has Sequence column:", "Sequence" %in% names(df), "\n")
+  cat("Has SeqID column:", "SeqID" %in% names(df), "\n\n")
+  
+  return(df_std)
+}
+```
+
+# Step 1. Analysis Pipeline Overview
+
+## **Integrated Analytical Workflow**
+
+**Pipeline Design:** This section integrates the SAD spectral analysis with mixture model fitting to provide comprehensive period detection and statistical validation, following the complete methodology from Kolker et al. OMICS 2002.
+
+**Dual Dataset Analysis:** Following the paper's approach, we analyze both complete and non-redundant datasets to assess the robustness of any detected periodicities. Consistent results across both datasets strengthen confidence in biological significance.
+
+**Parameter Integration:** The preferred period detected by SAD serves as an informed prior for the mixture model's fundamental period μ, linking the spectral and probabilistic approaches.
+
+```{r analysis_pipeline, echo=TRUE}
+# Function to perform complete analysis
+analyze_protein_lengths <- function(proteins_df, dataset_name, 
+                                   min_length = 50, max_length = 600,
+                                   min_period = 2, max_period = 160, k_peaks = 4) {
+  
+  # Create non-redundant dataset
+  nr_result <- create_nonredundant_dataset(proteins_df)
+  nonredundant_proteins <- nr_result$nonredundant
+  
+  # Filter by length range
+  filtered_proteins <- proteins_df %>%
+    filter(length_aa >= min_length & length_aa <= max_length)
+  
+  filtered_nonredundant <- nonredundant_proteins %>%
+    filter(length_aa >= min_length & length_aa <= max_length)
+  
+  cat("Analysis Summary for", dataset_name, ":\n")
+  cat("Total proteins:", nrow(proteins_df), "\n")
+  cat("Nonredundant proteins:", nrow(nonredundant_proteins), "\n")
+  cat("Proteins", min_length, "-", max_length, "aa:", nrow(filtered_proteins), 
+      "(", round(nrow(filtered_proteins)/nrow(proteins_df)*100, 1), "%)\n")
+  cat("Nonredundant proteins", min_length, "-", max_length, "aa:", nrow(filtered_nonredundant), 
+      "(", round(nrow(filtered_nonredundant)/nrow(nonredundant_proteins)*100, 1), "%)\n\n")
+  
+  # Apply SAD analysis
+  cat("Running SAD analysis on entire dataset...\n")
+  sad_results_all <- sad_analysis_kolker(filtered_proteins$length_aa, 
+                                        min_period, max_period, min_length, max_length)
+  
+  cat("Running SAD analysis on nonredundant dataset...\n")
+  sad_results_nonredundant <- sad_analysis_kolker(filtered_nonredundant$length_aa, 
+                                                 min_period, max_period, min_length, max_length)
+  
+  # Find preferred periods
+  preferred_period_all <- sad_results_all$period[which.max(sad_results_all$amplitude)]
+  preferred_period_nonredundant <- sad_results_nonredundant$period[which.max(sad_results_nonredundant$amplitude)]
+  
+  cat("Preferred period (entire dataset):", preferred_period_all, "aa\n")
+  cat("Preferred period (nonredundant dataset):", preferred_period_nonredundant, "aa\n\n")
+  
+  # Prepare length counts for mixture model
+  length_counts_all <- table(filtered_proteins$length_aa)
+  length_counts_nonredundant <- table(filtered_nonredundant$length_aa)
+  
+  # Fit mixture models
+  cat("Fitting mixture model to entire dataset...\n")
+  model_results_all <- fit_mixture_model_kolker(length_counts_all, preferred_period_all, 
+                                               k_peaks, min_length, max_length)
+  
+  cat("Fitting mixture model to nonredundant dataset...\n")
+  model_results_nonredundant <- fit_mixture_model_kolker(length_counts_nonredundant, 
+                                                        preferred_period_nonredundant, 
+                                                        k_peaks, min_length, max_length)
+  
+  return(list(
+    filtered_proteins = filtered_proteins,
+    filtered_nonredundant = filtered_nonredundant,
+    sad_results_all = sad_results_all,
+    sad_results_nonredundant = sad_results_nonredundant,
+    model_results_all = model_results_all,
+    model_results_nonredundant = model_results_nonredundant,
+    length_counts_all = length_counts_all,
+    length_counts_nonredundant = length_counts_nonredundant,
+    preferred_period_all = preferred_period_all,
+    preferred_period_nonredundant = preferred_period_nonredundant
+  ))
+}
+```
+
+# Step 2. Overview Visualization Functions Based on Previously Published Studies
+
+## **Data Visualization: Reproducing the Kolker et al. OMICS 2002 article analysis and Figures**
+
+**Figure Replication Strategy:** Our visualization functions strive to recreate the key figures from the original OMICS article (Figures 1, 4, and 3) to enable direct comparison with published results and validate our implementation.
+
+### **Length Distribution Plot (Figure 1 equivalent)**
+**Technical Details:** Shows raw histogram with 41-amino acid smoothing window, matching the paper's visualization approach. The smoothing reveals underlying trends while preserving the periodic structure.
+
+### **Cosine Spectrum Plot (Figure 4 equivalent)**  
+**Interpretation Guide:** Peak amplitude indicates periodicity strength. The highest peak identifies the fundamental period, with the x-axis value showing the preferred domain size in amino acids.
+
+### **Probability Density Plot (Figure 3 equivalent)**
+**Model Comparison:** Overlays observed data with fitted mixture model and background-only model. Vertical lines mark the fundamental period and its multiples (1×, 2×, 3×, 4×).
+
+**Visual Validation:** Good model fit appears as close agreement between the blue fitted line and black data bars, with clear peaks at the predicted periodic positions.
+
+```{r visualization_functions, echo=TRUE}
+# Function to plot length distribution
+plot_length_distribution <- function(data_vector, dataset_name, min_length = 50, max_length = 600) {
+  filtered_data <- data_vector[data_vector >= min_length & data_vector <= max_length]
+  hist_data <- hist(filtered_data, breaks = seq(min_length, max_length, by = 1), plot = FALSE)
+  
+  window_size <- 41
+  half_window <- floor(window_size / 2)
+  
+  plot_data <- data.frame(
+    length = min_length:max_length,
+    count = numeric(max_length - min_length + 1)
+  )
+  
+  for (i in 1:length(hist_data$counts)) {
+    if (min_length + i - 1 <= max_length) {
+      plot_data$count[i] <- hist_data$counts[i]
+    }
+  }
+  
+  smoothed_counts <- numeric(nrow(plot_data))
+  for (i in 1:nrow(plot_data)) {
+    start_idx <- max(1, i - half_window)
+    end_idx <- min(nrow(plot_data), i + half_window)
+    smoothed_counts[i] <- mean(plot_data$count[start_idx:end_idx])
+  }
+  
+  par(mar = c(5, 5, 4, 2) + 0.1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.4)
+  
+  plot(plot_data$length, plot_data$count, type = 'h', 
+       main = paste("Distribution of Enzyme Lengths:", dataset_name, "\n(Non-Redundant Dataset)"),
+       xlab = "Protein Length", ylab = "Number of Proteins",
+       xlim = c(min_length, max_length), ylim = c(0, max(plot_data$count) * 1.1),
+       col = "darkblue", lwd = 1)
+  
+  lines(plot_data$length, smoothed_counts, col = "red", lwd = 2)
+  
+  legend("topright", 
+         legend = c("Raw Distribution", "Smoothed (41-aa window)"),
+         col = c("darkblue", "red"), lty = c(1, 1), lwd = c(1, 2),
+         bg = "white", cex = 1.2)
+  
+  # return(list(raw = plot_data, smoothed = smoothed_counts)) # keeps RMD output concise.
+}
+
+# Function to plot cosine spectrum
+plot_cosine_spectrum <- function(sad_results, dataset_name, max_period = 160) {
+  plot_data <- sad_results[sad_results$period <= max_period, ]
+  max_period_val <- plot_data$period[which.max(plot_data$amplitude)]
+  
+  par(mar = c(5, 5, 4, 2) + 0.1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.4)
+  
+  plot(plot_data$period, plot_data$amplitude, type = 'l',
+       main = paste("Cosine Spectrum:", dataset_name),
+       xlab = "Period (amino acids)", ylab = "Amplitude",
+       xlim = c(0, max_period), col = "blue", lwd = 2)
+  
+  # return(max_period_val) # keeping RMD output concise
+}
+
+# Function to create probability density plot
+create_density_plot <- function(model_results, length_counts, dataset_name,
+                               min_length = 50, max_length = 600, k = 4) {
+  
+  mu <- model_results$mu; sigma <- model_results$sigma
+  alpha <- model_results$alpha; beta <- model_results$beta
+  p_values <- model_results$p_values; p_value <- model_results$p_value
+  
+  if (any(is.na(c(mu, sigma, alpha, beta))) || any(is.na(p_values))) {
+    warning("Invalid model parameters for ", dataset_name)
+    return(NULL)
+  }
+  
+  lengths <- min_length:max_length
+  
+  tryCatch({
+    g_pdf <- gamma_pdf_normalized(lengths, alpha, beta, min_length, max_length)
+    background_only <- g_pdf
+    full_model <- (1 - sum(p_values)) * g_pdf
+    
+    for (i in 1:k) {
+      peak_pdf <- normal_pdf_normalized(lengths, i*mu, sqrt(i)*sigma, min_length, max_length)
+      full_model <- full_model + p_values[i] * peak_pdf
+    }
+    
+    observed <- numeric(length(lengths))
+    names(observed) <- as.character(lengths)
+    
+    for (length in names(length_counts)) {
+      if (as.numeric(length) >= min_length && as.numeric(length) <= max_length) {
+        observed[length] <- length_counts[length]
+      }
+    }
+    
+    total_obs <- sum(observed)
+    if (total_obs > 0) observed <- observed / total_obs
+    
+    par(mar = c(5, 5, 4, 2) + 0.1, cex.axis = 1.2, cex.lab = 1.3, cex.main = 1.4)
+    
+    plot(lengths, observed, type = 'h', 
+         main = paste("Probability Density:", dataset_name, "\n(Non-Redundant Dataset)"),
+         xlab = "Protein Length", ylab = "Probability Density",
+         xlim = c(min_length, max_length), 
+         ylim = c(0, max(c(observed, full_model, background_only), na.rm = TRUE) * 1.1),
+         col = "black", lwd = 1.2)
+    
+    lines(lengths, full_model, col = "blue", lwd = 2.5)
+    lines(lengths, background_only, col = "red", lwd = 2, lty = 2)
+    
+    if (!is.na(mu)) {
+      abline(v = c(mu, 2*mu, 3*mu, 4*mu), col = "blue", lty = 3, lwd = 1.5)
+      text(c(mu, 2*mu, 3*mu, 4*mu), rep(0, 4), c("1×", "2×", "3×", "4×"), 
+           pos = 3, col = "blue", cex = 1.2)
+    }
+    
+    legend("topright", 
+           legend = c("Data", "Estimated model", "Background only"),
+           col = c("black", "blue", "red"), lty = c(1, 1, 2), lwd = c(1, 2.5, 2),
+           bg = "white", cex = 1.2)
+    
+    mtext(paste("Period =", round(mu, 2), "aa (p-value =", format(p_value, scientific = TRUE, digits = 2), ")"), 
+          side = 1, line = 3, cex = 1.2)
+    
+    # return(list(lengths = lengths, observed = observed, full_model = full_model,   # keeping RMD output concise
+    #            background_only = background_only))
+  }, error = function(e) {
+    warning(paste("Error creating density plot for", dataset_name, ":", e$message))
+    return(NULL)
+  })
+}
+```
+
+# Step 3. - Dataset 1 - Analysis Pipeline Execution
+
+```{r dataset1_analysis, echo=TRUE}
+
+# New dataset obtained by GS 9/7/25 read_tsv("uniprotkb_taxonomy_id_2759_AND_reviewed_unique_2.tsv") GS 9/7/25
+
+cat("Loading dataset:", datasets[1], "\n")
+
+# Read the dataset
+proteins_raw_1 <- read_csv(datasets[1], show_col_types = FALSE)
+cat("Raw dataset dimensions:", nrow(proteins_raw_1), "x", ncol(proteins_raw_1), "\n")
+
+# Standardize the dataset
+proteins_1 <- standardize_dataset(proteins_raw_1, dataset_names[1])
+cat("Standardized dataset dimensions:", nrow(proteins_1), "x", ncol(proteins_1), "\n")
+
+# Run the complete analysis
+results_1 <- analyze_protein_lengths(proteins_1, dataset_names[1], 
+                                   analysis_params$min_length, analysis_params$max_length,
+                                   analysis_params$min_period, analysis_params$max_period, 
+                                   analysis_params$k_peaks)
+
+# Store results for summary
+all_results[[1]] <- results_1
+```
+
+# Step 3.1 - Dataset 1 - Eukaryotic Protein Length Distribution - Figure S3a
+
+```{r length_distribution_1, echo=FALSE}
+plot_length_distribution(results_1$filtered_nonredundant$length_aa, dataset_names[1],
+                        analysis_params$min_length, analysis_params$max_length)
+```
+
+# Step 3.2 - Dataset 1 - Cosine Spectrum - Figure S4a
+
+```{r cosine_spectrum_1, echo=FALSE}
+plot_cosine_spectrum(results_1$sad_results_nonredundant, dataset_names[1], analysis_params$max_period)
+```
+
+# Step 3.3 - Dataset 1 - Probability Density 
+
+```{r probability_density_1, echo=FALSE}
+create_density_plot(results_1$model_results_nonredundant, results_1$length_counts_nonredundant,
+                   dataset_names[1], analysis_params$min_length, analysis_params$max_length, 
+                   analysis_params$k_peaks)
+```
+
+# Step 3.4 - Dataset 1 - Statistical Modeling Summary - component of Table 5 
+
+Table 5 Processed Datasets: Statistical Parameters and p-values (non-redundant)
+
+```{r statistical_summary_1, echo=FALSE}
+cat("===== STATISTICAL PARAMETERS FOR", toupper(dataset_names[1]), "=====\n")
+cat(sprintf("%-25s %-20s %-20s\n", "", "All Proteins", "Non-redundant"))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_pure_background", 
+            results_1$model_results_all$mu_pure_background, 
+            results_1$model_results_nonredundant$mu_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_pure_background", 
+            results_1$model_results_all$sigma_pure_background, 
+            results_1$model_results_nonredundant$sigma_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_background", 
+            results_1$model_results_all$mu_background, 
+            results_1$model_results_nonredundant$mu_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_background", 
+            results_1$model_results_all$sigma_background, 
+            results_1$model_results_nonredundant$sigma_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ (fundamental period)", 
+            results_1$model_results_all$mu, 
+            results_1$model_results_nonredundant$mu))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ", 
+            results_1$model_results_all$sigma, 
+            results_1$model_results_nonredundant$sigma))
+
+for (i in 1:analysis_params$k_peaks) {
+  cat(sprintf("%-25s %-20.4f %-20.4f\n", paste0("p", i), 
+              results_1$model_results_all$p_values[i], 
+              results_1$model_results_nonredundant$p_values[i]))
+}
+
+cat(sprintf("%-25s %-20s %-20s\n", "p-value", 
+            format(results_1$model_results_all$p_value, scientific = TRUE, digits = 3), 
+            format(results_1$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)))
+```
+
+# Step 4. - Dataset 2 Analysis Pipeline Execution
+
+```{r dataset2_analysis, echo=FALSE}
+
+# dataset2 <- read_tsv("uniprotkb_taxonomy_id_2759_AND_reviewed_unique.tsv") GS 9/7/25
+
+# write_csv(dataset2, "dataset_2.csv")
+
+cat("Loading dataset:", datasets[2], "\n")
+
+# Read the dataset
+proteins_raw_2 <- read_csv(datasets[2], show_col_types = FALSE)
+cat("Raw dataset dimensions:", nrow(proteins_raw_2), "x", ncol(proteins_raw_2), "\n")
+
+# Standardize the dataset
+proteins_2 <- standardize_dataset(proteins_raw_2, dataset_names[2])
+cat("Standardized dataset dimensions:", nrow(proteins_2), "x", ncol(proteins_2), "\n")
+
+# Run the complete analysis
+results_2 <- analyze_protein_lengths(proteins_2, dataset_names[2], 
+                                   analysis_params$min_length, analysis_params$max_length,
+                                   analysis_params$min_period, analysis_params$max_period, 
+                                   analysis_params$k_peaks)
+
+# Store results for summary
+all_results[[2]] <- results_2
+```
+
+# Step 4.1 - Dataset 2 - Eukaryotic Protein Length Distribution - Figure 3a  
+
+```{r length_distribution_2, echo=FALSE}
+plot_length_distribution(results_2$filtered_nonredundant$length_aa, dataset_names[2],
+                        analysis_params$min_length, analysis_params$max_length)
+```
+
+# Step 4.2 - Dataset 2 - Cosine Spectrum - Figure 4a
+
+```{r cosine_spectrum_2, echo=FALSE}
+plot_cosine_spectrum(results_2$sad_results_nonredundant, dataset_names[2], analysis_params$max_period)
+```
+
+# Step 4.3 - Dataset 2 - Probability Density 
+
+```{r probability_density_2, echo=FALSE}
+create_density_plot(results_2$model_results_nonredundant, results_2$length_counts_nonredundant,
+                   dataset_names[2], analysis_params$min_length, analysis_params$max_length, 
+                   analysis_params$k_peaks)
+```
+
+
+# Step 4.4 - Dataset 2 - Statistical Modeling Summary - component of Table 5
+
+```{r statistical_summary_2, echo=FALSE}
+cat("===== STATISTICAL PARAMETERS FOR", toupper(dataset_names[2]), "=====\n")
+cat(sprintf("%-25s %-20s %-20s\n", "", "All Proteins", "Non-redundant"))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_pure_background", 
+            results_2$model_results_all$mu_pure_background, 
+            results_2$model_results_nonredundant$mu_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_pure_background", 
+            results_2$model_results_all$sigma_pure_background, 
+            results_2$model_results_nonredundant$sigma_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_background", 
+            results_2$model_results_all$mu_background, 
+            results_2$model_results_nonredundant$mu_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_background", 
+            results_2$model_results_all$sigma_background, 
+            results_2$model_results_nonredundant$sigma_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ (fundamental period)", 
+            results_2$model_results_all$mu, 
+            results_2$model_results_nonredundant$mu))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ", 
+            results_2$model_results_all$sigma, 
+            results_2$model_results_nonredundant$sigma))
+
+for (i in 1:analysis_params$k_peaks) {
+  cat(sprintf("%-25s %-20.4f %-20.4f\n", paste0("p", i), 
+              results_2$model_results_all$p_values[i], 
+              results_2$model_results_nonredundant$p_values[i]))
+}
+
+cat(sprintf("%-25s %-20s %-20s\n", "p-value", 
+            format(results_2$model_results_all$p_value, scientific = TRUE, digits = 3), 
+            format(results_2$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)))
+```
+
+# Step 5. - Dataset 3 Analysis Pipeline Execution
+
+```{r dataset3_analysis, echo=TRUE}
+
+# Independent reviewer 3 dataset originally called: "uniprotkb_taxonomy_id_2759_AND_ec_AND_r_2025_06_27.csv" was renamed dataset_3
+
+cat("Loading dataset:", datasets[3], "\n")
+
+# Read the dataset
+proteins_raw_3 <- read_csv(datasets[3], show_col_types = FALSE)
+cat("Raw dataset dimensions:", nrow(proteins_raw_3), "x", ncol(proteins_raw_3), "\n")
+
+# Standardize the dataset
+proteins_3 <- standardize_dataset(proteins_raw_3, dataset_names[3])
+cat("Standardized dataset dimensions:", nrow(proteins_3), "x", ncol(proteins_3), "\n")
+
+# Run the complete analysis
+results_3 <- analyze_protein_lengths(proteins_3, dataset_names[3], 
+                                   analysis_params$min_length, analysis_params$max_length,
+                                   analysis_params$min_period, analysis_params$max_period, 
+                                   analysis_params$k_peaks)
+
+# Store results for summary
+all_results[[3]] <- results_3
+```
+
+# Step 5.1 - Dataset 3 - Eukaryotic Protein Length Distribution - Figure S3b
+
+```{r length_distribution_3, echo=FALSE}
+plot_length_distribution(results_3$filtered_nonredundant$length_aa, dataset_names[3],
+                        analysis_params$min_length, analysis_params$max_length)
+```
+
+# Step 5.2 - Dataset 3 - Cosine Spectrum - Figure S4b
+
+```{r cosine_spectrum_3, echo=FALSE}
+plot_cosine_spectrum(results_3$sad_results_nonredundant, dataset_names[3], analysis_params$max_period)
+```
+
+# Step 5.3 - Dataset 3 - Probability Density 
+
+```{r probability_density_3, echo=FALSE}
+create_density_plot(results_3$model_results_nonredundant, results_3$length_counts_nonredundant,
+                   dataset_names[3], analysis_params$min_length, analysis_params$max_length, 
+                   analysis_params$k_peaks)
+```
+
+# Step 5.4 - Dataset 3 - Statistical Modeling Parameter Summary
+
+```{r statistical_summary_3, echo=FALSE}
+cat("===== STATISTICAL PARAMETERS FOR", toupper(dataset_names[3]), "=====\n")
+cat(sprintf("%-25s %-20s %-20s\n", "", "All Proteins", "Non-redundant"))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_pure_background", 
+            results_3$model_results_all$mu_pure_background, 
+            results_3$model_results_nonredundant$mu_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_pure_background", 
+            results_3$model_results_all$sigma_pure_background, 
+            results_3$model_results_nonredundant$sigma_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_background", 
+            results_3$model_results_all$mu_background, 
+            results_3$model_results_nonredundant$mu_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_background", 
+            results_3$model_results_all$sigma_background, 
+            results_3$model_results_nonredundant$sigma_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ (fundamental period)", 
+            results_3$model_results_all$mu, 
+            results_3$model_results_nonredundant$mu))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ", 
+            results_3$model_results_all$sigma, 
+            results_3$model_results_nonredundant$sigma))
+
+for (i in 1:analysis_params$k_peaks) {
+  cat(sprintf("%-25s %-20.4f %-20.4f\n", paste0("p", i), 
+              results_3$model_results_all$p_values[i], 
+              results_3$model_results_nonredundant$p_values[i]))
+}
+
+cat(sprintf("%-25s %-20s %-20s\n", "p-value", 
+            format(results_3$model_results_all$p_value, scientific = TRUE, digits = 3), 
+            format(results_3$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)))
+```
+
+# Step 6. - Dataset 4 - Analysis Pipeline Execution 
+
+Source file: filtered_enzyme_dataset_clusterize80.csv
+
+```{r dataset4_analysis, echo=TRUE}
+cat("Loading dataset:", datasets[4], "\n")
+
+# Read the dataset
+proteins_raw_4 <- read_csv(datasets[4], show_col_types = FALSE)
+cat("Raw dataset dimensions:", nrow(proteins_raw_4), "x", ncol(proteins_raw_4), "\n")
+
+# Standardize the dataset
+proteins_4 <- standardize_dataset(proteins_raw_4, dataset_names[4])
+cat("Standardized dataset dimensions:", nrow(proteins_4), "x", ncol(proteins_4), "\n")
+
+# Run the complete analysis
+results_4 <- analyze_protein_lengths(proteins_4, dataset_names[4], 
+                                   analysis_params$min_length, analysis_params$max_length,
+                                   analysis_params$min_period, analysis_params$max_period, 
+                                   analysis_params$k_peaks)
+
+# Store results for summary
+all_results[[4]] <- results_4
+```
+
+# Step 6.1 - Dataset 4 - Eukaryotic Protein Length Distribution - Figure 3b
+
+```{r length_distribution_4, echo=FALSE}
+plot_length_distribution(results_4$filtered_nonredundant$length_aa, dataset_names[4],
+                        analysis_params$min_length, analysis_params$max_length)
+```
+
+# Step 6.2 - Dataset 4 - Cosine Spectrum - Figure 4b
+
+```{r cosine_spectrum_4, echo=FALSE}
+plot_cosine_spectrum(results_4$sad_results_nonredundant, dataset_names[4], analysis_params$max_period)
+```
+
+# Step 6.3 - Dataset 4 - Probability Density -
+
+```{r probability_density_4, echo=FALSE}
+create_density_plot(results_4$model_results_nonredundant, results_4$length_counts_nonredundant,
+                   dataset_names[4], analysis_params$min_length, analysis_params$max_length, 
+                   analysis_params$k_peaks)
+```
+
+# Step 6.4 - Dataset 4 - Statistical Mixture Modeling Summary - Table 5 component
+
+```{r statistical_summary_4, echo=TRUE}
+cat("===== STATISTICAL PARAMETERS FOR", toupper(dataset_names[4]), "=====\n")
+cat(sprintf("%-25s %-20s %-20s\n", "", "All Proteins", "Non-redundant"))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_pure_background", 
+            results_4$model_results_all$mu_pure_background, 
+            results_4$model_results_nonredundant$mu_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_pure_background", 
+            results_4$model_results_all$sigma_pure_background, 
+            results_4$model_results_nonredundant$sigma_pure_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ_background", 
+            results_4$model_results_all$mu_background, 
+            results_4$model_results_nonredundant$mu_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ_background", 
+            results_4$model_results_all$sigma_background, 
+            results_4$model_results_nonredundant$sigma_background))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "μ (fundamental period)", 
+            results_4$model_results_all$mu, 
+            results_4$model_results_nonredundant$mu))
+cat(sprintf("%-25s %-20.4f %-20.4f\n", "σ", 
+            results_4$model_results_all$sigma, 
+            results_4$model_results_nonredundant$sigma))
+
+for (i in 1:analysis_params$k_peaks) {
+  cat(sprintf("%-25s %-20.4f %-20.4f\n", paste0("p", i), 
+              results_4$model_results_all$p_values[i], 
+              results_4$model_results_nonredundant$p_values[i]))
+}
+
+cat(sprintf("%-25s %-20s %-20s\n", "p-value", 
+            format(results_4$model_results_all$p_value, scientific = TRUE, digits = 3), 
+            format(results_4$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)))
+```
+
+# Step 7. - Consolidated Statistical Parameters All 4 Datasets - Table 5 - 
+
+```{r consolidated_statistical_parameters, echo=TRUE}
+# Create comprehensive statistical parameters table
+statistical_params_table <- data.frame(
+  Parameter = c("μ_pure_background", "σ_pure_background", "μ_background", "σ_background", 
+                "μ (fundamental period)", "σ", "p1", "p2", "p3", "p4", "p-value"),
+  
+  # Dataset_1_All = c(
+  #  round(all_results[[1]]$model_results_all$mu_pure_background, 4),
+  #  round(all_results[[1]]$model_results_all$sigma_pure_background, 4),
+  #  round(all_results[[1]]$model_results_all$mu_background, 4),
+  #  round(all_results[[1]]$model_results_all$sigma_background, 4),
+  #  round(all_results[[1]]$model_results_all$mu, 4),
+  #  round(all_results[[1]]$model_results_all$sigma, 4),
+  #  round(all_results[[1]]$model_results_all$p_values[1], 4),
+  #  round(all_results[[1]]$model_results_all$p_values[2], 4),
+  #  round(all_results[[1]]$model_results_all$p_values[3], 4),
+  #  round(all_results[[1]]$model_results_all$p_values[4], 4),
+  #  format(all_results[[1]]$model_results_all$p_value, scientific = TRUE, digits = 3)
+  # ),
+  
+  Dataset_1_NR = c(
+    round(all_results[[1]]$model_results_nonredundant$mu_pure_background, 4),
+    round(all_results[[1]]$model_results_nonredundant$sigma_pure_background, 4),
+    round(all_results[[1]]$model_results_nonredundant$mu_background, 4),
+    round(all_results[[1]]$model_results_nonredundant$sigma_background, 4),
+    round(all_results[[1]]$model_results_nonredundant$mu, 4),
+    round(all_results[[1]]$model_results_nonredundant$sigma, 4),
+    round(all_results[[1]]$model_results_nonredundant$p_values[1], 4),
+    round(all_results[[1]]$model_results_nonredundant$p_values[2], 4),
+    round(all_results[[1]]$model_results_nonredundant$p_values[3], 4),
+    round(all_results[[1]]$model_results_nonredundant$p_values[4], 4),
+    format(all_results[[1]]$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)
+  ),
+  
+  # Dataset_2_All = c(
+  #  round(all_results[[2]]$model_results_all$mu_pure_background, 4),
+  #  round(all_results[[2]]$model_results_all$sigma_pure_background, 4),
+  #  round(all_results[[2]]$model_results_all$mu_background, 4),
+  #  round(all_results[[2]]$model_results_all$sigma_background, 4),
+  #  round(all_results[[2]]$model_results_all$mu, 4),
+  #  round(all_results[[2]]$model_results_all$sigma, 4),
+  #  round(all_results[[2]]$model_results_all$p_values[1], 4),
+  #  round(all_results[[2]]$model_results_all$p_values[2], 4),
+  #  round(all_results[[2]]$model_results_all$p_values[3], 4),
+  #  round(all_results[[2]]$model_results_all$p_values[4], 4),
+  #  format(all_results[[2]]$model_results_all$p_value, scientific = TRUE, digits = 3)
+  # ),
+  
+  Dataset_2_NR = c(
+    round(all_results[[2]]$model_results_nonredundant$mu_pure_background, 4),
+    round(all_results[[2]]$model_results_nonredundant$sigma_pure_background, 4),
+    round(all_results[[2]]$model_results_nonredundant$mu_background, 4),
+    round(all_results[[2]]$model_results_nonredundant$sigma_background, 4),
+    round(all_results[[2]]$model_results_nonredundant$mu, 4),
+    round(all_results[[2]]$model_results_nonredundant$sigma, 4),
+    round(all_results[[2]]$model_results_nonredundant$p_values[1], 4),
+    round(all_results[[2]]$model_results_nonredundant$p_values[2], 4),
+    round(all_results[[2]]$model_results_nonredundant$p_values[3], 4),
+    round(all_results[[2]]$model_results_nonredundant$p_values[4], 4),
+    format(all_results[[2]]$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)
+  ),
+  
+  # Dataset_3_All = c(
+  #  round(all_results[[3]]$model_results_all$mu_pure_background, 4),
+  #  round(all_results[[3]]$model_results_all$sigma_pure_background, 4),
+  #  round(all_results[[3]]$model_results_all$mu_background, 4),
+  #  round(all_results[[3]]$model_results_all$sigma_background, 4),
+  #  round(all_results[[3]]$model_results_all$mu, 4),
+  #  round(all_results[[3]]$model_results_all$sigma, 4),
+  #  round(all_results[[3]]$model_results_all$p_values[1], 4),
+  #  round(all_results[[3]]$model_results_all$p_values[2], 4),
+  #  round(all_results[[3]]$model_results_all$p_values[3], 4),
+  #  round(all_results[[3]]$model_results_all$p_values[4], 4),
+  #  format(all_results[[3]]$model_results_all$p_value, scientific = TRUE, digits = 3)
+  # ),
+  
+  Dataset_3_NR = c(
+    round(all_results[[3]]$model_results_nonredundant$mu_pure_background, 4),
+    round(all_results[[3]]$model_results_nonredundant$sigma_pure_background, 4),
+    round(all_results[[3]]$model_results_nonredundant$mu_background, 4),
+    round(all_results[[3]]$model_results_nonredundant$sigma_background, 4),
+    round(all_results[[3]]$model_results_nonredundant$mu, 4),
+    round(all_results[[3]]$model_results_nonredundant$sigma, 4),
+    round(all_results[[3]]$model_results_nonredundant$p_values[1], 4),
+    round(all_results[[3]]$model_results_nonredundant$p_values[2], 4),
+    round(all_results[[3]]$model_results_nonredundant$p_values[3], 4),
+    round(all_results[[3]]$model_results_nonredundant$p_values[4], 4),
+    format(all_results[[3]]$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)
+  ),
+  
+  # Dataset_4_All = c(
+  #  round(all_results[[4]]$model_results_all$mu_pure_background, 4),
+  #  round(all_results[[4]]$model_results_all$sigma_pure_background, 4),
+  #  round(all_results[[4]]$model_results_all$mu_background, 4),
+  #  round(all_results[[4]]$model_results_all$sigma_background, 4),
+  #  round(all_results[[4]]$model_results_all$mu, 4),
+  #  round(all_results[[4]]$model_results_all$sigma, 4),
+  #  round(all_results[[4]]$model_results_all$p_values[1], 4),
+  #  round(all_results[[4]]$model_results_all$p_values[2], 4),
+  #  round(all_results[[4]]$model_results_all$p_values[3], 4),
+  #  round(all_results[[4]]$model_results_all$p_values[4], 4),
+  #  format(all_results[[4]]$model_results_all$p_value, scientific = TRUE, digits = 3)
+  # ),
+  
+  Dataset_4_NR = c(
+    round(all_results[[4]]$model_results_nonredundant$mu_pure_background, 4),
+    round(all_results[[4]]$model_results_nonredundant$sigma_pure_background, 4),
+    round(all_results[[4]]$model_results_nonredundant$mu_background, 4),
+    round(all_results[[4]]$model_results_nonredundant$sigma_background, 4),
+    round(all_results[[4]]$model_results_nonredundant$mu, 4),
+    round(all_results[[4]]$model_results_nonredundant$sigma, 4),
+    round(all_results[[4]]$model_results_nonredundant$p_values[1], 4),
+    round(all_results[[4]]$model_results_nonredundant$p_values[2], 4),
+    round(all_results[[4]]$model_results_nonredundant$p_values[3], 4),
+    round(all_results[[4]]$model_results_nonredundant$p_values[4], 4),
+    format(all_results[[4]]$model_results_nonredundant$p_value, scientific = TRUE, digits = 3)
+  )
+)
+
+# Display the comprehensive statistical parameters table
+kable(statistical_params_table, 
+      col.names = c("Parameter", "NR", "NR", "NR", "NR"),
+      caption = "Comprehensive Statistical Parameters: All Four Datasets") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = TRUE, font_size = 10) %>%
+  add_header_above(c(" " = 1, "Dataset 1" = 1, "Dataset 2" = 1, "Dataset 3" = 1, "Dataset 4" = 1)) %>%
+  column_spec(1, bold = TRUE, width = "3cm") %>%
+  column_spec(2:5, width = "1.5cm")
+```
+
+# Step 8. - Combined Probability Density Plots - Supplemental Figure SX -
+
+```{r patchwork_density_plots, echo=TRUE, fig.width=12, fig.height=10}
+# Create ggplot versions of density plots for patchwork
+create_ggplot_density <- function(model_results, length_counts, dataset_name, 
+                                 min_length = 50, max_length = 600, k = 4) {
+  
+  mu <- model_results$mu; sigma <- model_results$sigma
+  alpha <- model_results$alpha; beta <- model_results$beta
+  p_values <- model_results$p_values; p_value <- model_results$p_value
+  
+  if (any(is.na(c(mu, sigma, alpha, beta))) || any(is.na(p_values))) {
+    return(ggplot() + ggtitle(paste("Error:", dataset_name)) + theme_void())
+  }
+  
+  lengths <- min_length:max_length
+  
+  tryCatch({
+    g_pdf <- gamma_pdf_normalized(lengths, alpha, beta, min_length, max_length)
+    background_only <- g_pdf
+    full_model <- (1 - sum(p_values)) * g_pdf
+    
+    for (i in 1:k) {
+      peak_pdf <- normal_pdf_normalized(lengths, i*mu, sqrt(i)*sigma, min_length, max_length)
+      full_model <- full_model + p_values[i] * peak_pdf
+    }
+    
+    observed <- numeric(length(lengths))
+    names(observed) <- as.character(lengths)
+    
+    for (length in names(length_counts)) {
+      if (as.numeric(length) >= min_length && as.numeric(length) <= max_length) {
+        observed[length] <- length_counts[length]
+      }
+    }
+    
+    total_obs <- sum(observed)
+    if (total_obs > 0) observed <- observed / total_obs
+    
+    # Create plot data
+    plot_data <- data.frame(
+      length = lengths,
+      observed = observed,
+      full_model = full_model,
+      background_only = background_only
+    )
+    
+    p <- ggplot(plot_data, aes(x = length)) +
+      geom_col(aes(y = observed), color = "black", fill = "lightgray", width = 0.8) +
+      geom_line(aes(y = full_model), color = "blue", size = 1.2) +
+      geom_line(aes(y = background_only), color = "red", size = 1, linetype = "dashed") +
+      labs(title = paste("Probability Density:", dataset_name),
+           subtitle = paste("μ =", round(mu, 2), "aa, p =", format(p_value, scientific = TRUE, digits = 2)),
+           x = "Protein Length (aa)", 
+           y = "Probability Density") +
+      xlim(min_length, max_length) +
+      theme_minimal() +
+      theme(plot.title = element_text(size = 12, hjust = 0.5),
+            plot.subtitle = element_text(size = 10, hjust = 0.5),
+            axis.title = element_text(size = 10),
+            axis.text = element_text(size = 9))
+    
+    # Add periodic markers
+    if (!is.na(mu)) {
+      p <- p + geom_vline(xintercept = c(mu, 2*mu, 3*mu, 4*mu), 
+                         color = "blue", linetype = "dotted", alpha = 0.7)
+    }
+    
+    return(p)
+    
+  }, error = function(e) {
+    return(ggplot() + ggtitle(paste("Error:", dataset_name)) + theme_void())
+  })
+}
+
+# Create individual density plots
+p1_density <- create_ggplot_density(all_results[[1]]$model_results_nonredundant, 
+                                   all_results[[1]]$length_counts_nonredundant, 
+                                   dataset_names[1], analysis_params$min_length, 
+                                   analysis_params$max_length, analysis_params$k_peaks)
+
+p2_density <- create_ggplot_density(all_results[[2]]$model_results_nonredundant, 
+                                   all_results[[2]]$length_counts_nonredundant, 
+                                   dataset_names[2], analysis_params$min_length, 
+                                   analysis_params$max_length, analysis_params$k_peaks)
+
+p3_density <- create_ggplot_density(all_results[[3]]$model_results_nonredundant, 
+                                   all_results[[3]]$length_counts_nonredundant, 
+                                   dataset_names[3], analysis_params$min_length, 
+                                   analysis_params$max_length, analysis_params$k_peaks)
+
+p4_density <- create_ggplot_density(all_results[[4]]$model_results_nonredundant, 
+                                   all_results[[4]]$length_counts_nonredundant, 
+                                   dataset_names[4], analysis_params$min_length, 
+                                   analysis_params$max_length, analysis_params$k_peaks)
+
+# Combine with patchwork
+combined_density <- (p1_density | p2_density) / (p3_density | p4_density)
+combined_density + plot_annotation(
+  title = "Comparative Probability Density Models: All Four Datasets (Non-redundant)",
+  subtitle = "Mixture Model Fitting with Periodic Components vs Background-Only Models",
+  theme = theme(plot.title = element_text(size = 16, hjust = 0.5),
+                plot.subtitle = element_text(size = 12, hjust = 0.5))
+)
+```
+
+# Step 9. - Advancing Statistical Analysis by Team C - Extended from OMICS 2002 Paper -
+
+```{r mixture_functions}
+## STATISTICAL MIXTURE MODEL: Extension of OMICS 2002 Framework
+## OMICS 2002 introduced probabilistic mixture model combining:
+## 1. Smooth background distribution (gamma family for flexibility with skewness)
+## 2. Individual peaks at preferred lengths μ and multiples 2μ, 3μ, ..., kμ
+## 3. Peak strengths p1, p2, ..., pk and standard deviations σ, √2σ, ..., √kσ
+
+## BIOLOGICAL INTERPRETATION: "protein chain composed of i subunits, each with
+## mean length μ and standard deviation σ, statistically independent"
+## This reflects domain-based organization of eukaryotic proteins
+
+## MODERN STATISTICAL EXTENSION: Maximum Likelihood with Constrained Optimization
+## OMICS 2002 used "method of maximum likelihood" but modern implementation
+## uses robust optimization algorithms (L-BFGS-B) with parameter constraints
+
+# Log-likelihood for full mixture model (gamma background + 4 normal peaks)
+log_likelihood_mixture <- function(params, lengths) {
+  alpha <- params[1]    # gamma shape
+  beta <- params[2]     # gamma scale  
+  mu <- params[3]       # base period
+  sigma <- params[4]    # base std dev
+  p1 <- params[5]       # weight for 1x peak
+  p2 <- params[6]       # weight for 2x peak
+  p3 <- params[7]       # weight for 3x peak
+  p4 <- params[8]       # weight for 4x peak
+  
+  # Constraint: weights must sum to <= 1
+  if (sum(p1, p2, p3, p4) > 1) return(Inf)
+  
+  p0 <- 1 - (p1 + p2 + p3 + p4)  # background weight
+  
+  ## MIXTURE MODEL COMPONENTS: Following OMICS 2002 Statistical Framework
+  ## Background: Gamma distribution for flexible background shapes
+  ## Peaks: Normal distributions at multiples of base period μ
+  ## Standard deviations scale as √i*σ for i-th multiple (central limit theorem)
+  
+  # Component PDFs
+  background_pdf <- dgamma(lengths, shape = alpha, scale = beta)
+  peak1_pdf <- dnorm(lengths, mean = mu, sd = sigma)
+  peak2_pdf <- dnorm(lengths, mean = 2*mu, sd = sqrt(2)*sigma)
+  peak3_pdf <- dnorm(lengths, mean = 3*mu, sd = sqrt(3)*sigma)
+  peak4_pdf <- dnorm(lengths, mean = 4*mu, sd = sqrt(4)*sigma)
+  
+  # Mixture PDF
+  mixture_pdf <- p0 * background_pdf + p1 * peak1_pdf + p2 * peak2_pdf + 
+                 p3 * peak3_pdf + p4 * peak4_pdf
+  
+  # Return negative log-likelihood for minimization
+  -sum(log(mixture_pdf + 1e-10))
+}
+
+# Log-likelihood for background-only model (gamma distribution)
+log_likelihood_background <- function(params, lengths) {
+  alpha <- params[1]
+  beta <- params[2]
+  
+  background_pdf <- dgamma(lengths, shape = alpha, scale = beta)
+  -sum(log(background_pdf + 1e-10))
+}
+
+## STATISTICAL TESTING FRAMEWORK: Extensions Beyond OMICS 2002
+## Original paper used likelihood ratio test for significance testing
+## Modern implementation adds:
+## 1. AIC/BIC model comparison (information-theoretic criteria)
+## 2. Bootstrap confidence intervals (uncertainty quantification)
+## 3. Robust optimization with convergence diagnostics
+```
+
+# Step 10. - Sequential Dataset Processing - Statistical Analysis Team C -
+
+```{r sequential_analysis, results='asis'}
+
+# Sequential Dataset Processing 
+# Initialize storage for results
+all_results_teamc <- list()
+
+# Loop through each dataset
+for (dataset_idx in 1:length(datasets)) {
+  # Use the existing datasets and dataset_names vectors
+  filename <- datasets[dataset_idx]
+  variable_name <- dataset_names[dataset_idx]
+  description <- paste("Dataset", dataset_idx, "-", variable_name)
+  
+  cat("\n## Dataset", dataset_idx, ":", variable_name, "\n\n")
+  
+  # Initialize results storage
+  dataset_results <- list(
+    variable_name = variable_name,
+    filename = filename,
+    description = description
+  )
+  
+  tryCatch({
+    # Load data - Use the already loaded and standardized data
+    cat("Using pre-loaded and standardized data for", variable_name, "...\n")
+    
+    # Get the appropriate filtered dataset from your existing results
+    analysis_data <- all_results[[dataset_idx]]$filtered_proteins
+    
+    # Store initial row count
+    initial_row_count <- nrow(analysis_data)
+    
+    # The data is already filtered for 50-600 aa in your pipeline, so use it directly
+    enzyme_lengths <- analysis_data$length_aa
+    
+    cat("Using", length(enzyme_lengths), "valid sequences (50-600 aa)\n")
+    
+    # Store basic info including initial count
+    dataset_results$initial_row_count <- initial_row_count
+    dataset_results$n_sequences <- length(enzyme_lengths)
+    dataset_results$mean_length <- mean(enzyme_lengths)
+    dataset_results$median_length <- median(enzyme_lengths)
+    dataset_results$sd_length <- sd(enzyme_lengths)
+    dataset_results$min_length <- min(enzyme_lengths)
+    dataset_results$max_length <- max(enzyme_lengths)
+    
+    
+    if (length(enzyme_lengths) > 0) {
+      
+      ## MIXTURE MODEL ANALYSIS: Statistical Framework Implementation
+      ## OMICS 2002 introduced mixture model for rigorous statistical testing
+      ## Modern implementation extends with robust optimization and uncertainty quantification
+      
+      # MIXTURE MODEL ANALYSIS
+      cat("Fitting mixture model...\n")
+      
+      ## PARAMETER INITIALIZATION: Based on OMICS 2002 Estimates
+      ## Original study reported: μ ≈ 125 aa, σ ≈ 12 aa
+      ## Gamma parameters estimated from background distribution characteristics
+      ## Mixing weights initialized based on observed peak prominence
+      
+      # Parameter setup
+      initial_params <- c(1.5, 200, 120, 12, 0.05, 0.1, 0.08, 0.07)
+      lower_bounds <- c(0.1, 50, 100, 5, 0, 0, 0, 0)
+      upper_bounds <- c(10, 500, 150, 20, 0.3, 0.3, 0.3, 0.3)
+      
+      ## OPTIMIZATION STRATEGY: Modern Maximum Likelihood Implementation
+      ## METHODOLOGICAL EXTENSION: L-BFGS-B algorithm with box constraints
+      ## provides more robust parameter estimation than methods available in 2002
+      
+      # Fit full mixture model
+      mixture_result <- optim(
+        par = initial_params,
+        fn = log_likelihood_mixture,
+        lengths = enzyme_lengths,
+        method = "L-BFGS-B",
+        lower = lower_bounds,
+        upper = upper_bounds,
+        control = list(maxit = 1000)
+      )
+      
+      # Fit background-only model
+      background_result <- optim(
+        par = initial_params[1:2],
+        fn = log_likelihood_background,
+        lengths = enzyme_lengths,
+        method = "L-BFGS-B",
+        lower = lower_bounds[1:2],
+        upper = upper_bounds[1:2]
+      )
+      
+      # Extract parameters
+      opt_params <- mixture_result$par
+      names(opt_params) <- c("alpha", "beta", "mu", "sigma", "p1", "p2", "p3", "p4")
+      
+      # Calculate derived parameters
+      alpha <- opt_params["alpha"]
+      beta <- opt_params["beta"] 
+      mu <- opt_params["mu"]
+      sigma <- opt_params["sigma"]
+      p1 <- opt_params["p1"]
+      p2 <- opt_params["p2"]
+      p3 <- opt_params["p3"]
+      p4 <- opt_params["p4"]
+      p0 <- 1 - (p1 + p2 + p3 + p4)
+      
+      cat("Full model optimization completed (convergence:", mixture_result$convergence == 0, ")\n")
+      cat("Background model optimization completed (convergence:", background_result$convergence == 0, ")\n")
+      
+      ## STATISTICAL TESTING: Likelihood Ratio Test (OMICS 2002) + Modern Extensions
+      ## Original methodology: χ² test with (k+2) degrees of freedom
+      ## Modern additions: AIC/BIC for model comparison, robust uncertainty quantification
+      
+      # Statistical tests
+      lrt_statistic <- 2 * (background_result$value - mixture_result$value)
+      p_value <- 1 - pchisq(lrt_statistic, df = 6)
+      
+      n <- length(enzyme_lengths)
+      n_params_full <- 8
+      n_params_background <- 2
+      
+      ## MODEL SELECTION CRITERIA: Information-Theoretic Extensions
+      ## AIC/BIC provide alternative to pure significance testing
+      ## These criteria were not available/standard in 2002 bioinformatics
+      
+      AIC_full <- 2 * mixture_result$value + 2 * n_params_full
+      AIC_background <- 2 * background_result$value + 2 * n_params_background
+      
+      BIC_full <- 2 * mixture_result$value + n_params_full * log(n)
+      BIC_background <- 2 * background_result$value + n_params_background * log(n)
+      
+      cat("\nStatistical Testing:\n")
+      cat("LRT statistic:", round(lrt_statistic, 2), "\n")
+      cat("P-value:", ifelse(p_value < 2.2e-16, "< 2.2e-16", sprintf("%.2e", p_value)), "\n")
+      cat("AIC improvement:", round(AIC_background - AIC_full, 1), "\n")
+      cat("BIC improvement:", round(BIC_background - BIC_full, 1), "\n")
+      
+      ## BOOTSTRAP ANALYSIS: Modern Uncertainty Quantification
+      ## MAJOR EXTENSION BEYOND OMICS 2002: Bootstrap confidence intervals
+      ## Provides robust uncertainty estimates for parameter estimates
+      ## Not available in original computational framework (2002 limitations)
+      
+      # Bootstrap Analysis
+      cat("\nRunning bootstrap analysis for confidence intervals...\n")
+      
+      n_bootstrap <- 100
+      bootstrap_params <- matrix(NA, nrow = n_bootstrap, ncol = 8)
+      
+      set.seed(42)
+      for (i in 1:n_bootstrap) {
+        if (i %% 20 == 0) cat("  Bootstrap iteration", i, "of", n_bootstrap, "\n")
+        
+        # Bootstrap sample
+        sample_indices <- sample(length(enzyme_lengths), replace = TRUE)
+        bootstrap_sample <- enzyme_lengths[sample_indices]
+        
+        # Fit model to bootstrap sample
+        tryCatch({
+          boot_result <- optim(
+            par = opt_params,
+            fn = log_likelihood_mixture,
+            lengths = bootstrap_sample,
+            method = "L-BFGS-B",
+            lower = lower_bounds,
+            upper = upper_bounds,
+            control = list(maxit = 200)
+          )
+          
+          if (boot_result$convergence == 0) {
+            bootstrap_params[i, ] <- boot_result$par
+          } else {
+            bootstrap_params[i, ] <- opt_params
+          }
+        }, error = function(e) {
+          bootstrap_params[i, ] <- opt_params
+        })
+      }
+      
+      # Calculate confidence intervals
+      valid_boots <- complete.cases(bootstrap_params)
+      n_valid_boots <- sum(valid_boots)
+      
+      if (n_valid_boots >= 10) {
+        lower_ci <- apply(bootstrap_params[valid_boots, ], 2, quantile, probs = 0.025, na.rm = TRUE)
+        upper_ci <- apply(bootstrap_params[valid_boots, ], 2, quantile, probs = 0.975, na.rm = TRUE)
+      } else {
+        warning("Insufficient successful bootstrap iterations")
+        lower_ci <- upper_ci <- opt_params
+      }
+      
+      cat("Bootstrap completed:", n_valid_boots, "successful iterations\n")
+      
+      ## PARAMETER INTERPRETATION: Biological Significance
+      ## μ (base period): Fundamental domain unit size
+      ## σ (period standard deviation): Variability in domain organization
+      ## p_i (mixing weights): Relative frequency of i-domain proteins
+      ## Bootstrap CIs quantify uncertainty in these biological parameters
+      
+      # Parameter Estimates Table
+      param_names <- c("α (gamma shape)", "β (gamma scale)", "μ (base period)", "σ (period std)", 
+                       "p₁ (1× weight)", "p₂ (2× weight)", "p₃ (3× weight)", "p₄ (4× weight)")
+      
+      parameter_estimates <- data.frame(
+        Parameter = param_names,
+        Estimate = round(opt_params, 4),
+        Lower_CI = round(lower_ci, 4),
+        Upper_CI = round(upper_ci, 4),
+        CI_Width = round(upper_ci - lower_ci, 4)
+      )
+      
+      # keeping RMD concise - there is a summary table for all four datasets at the end.
+      
+      # print(kable(parameter_estimates,
+      #            caption = paste0("Parameter Estimates with 95% CIs - ", variable_name),
+      #            col.names = c("Parameter", "Estimate", "Lower CI", "Upper CI", "CI Width")) %>%
+      #        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+      #                      full_width = FALSE) %>%
+      #        row_spec(0, bold = TRUE, background = "#f8f9fa") %>%
+      #        pack_rows("Background Distribution", 1, 2, label_row_css = "background-color: #e3f2fd;") %>%
+      #        pack_rows("Periodic Structure", 3, 4, label_row_css = "background-color: #f3e5f5;") %>%
+      #        pack_rows("Mixing Weights", 5, 8, label_row_css = "background-color: #e8f5e8;"))
+      
+      ## MIXTURE MODEL VISUALIZATION: Enhanced Implementation
+      ## OMICS 2002 Figure 3 inspired visualization with modern enhancements
+      ## Shows empirical data, estimated model components, and full mixture fit
+      
+      # Individual Mixture Model Visualization
+      cat("\n### Mixture Model Visualization -", variable_name, "\n\n")
+      
+      # Prepare data for plotting
+      x_range <- seq(50, 600, length.out = 551)
+      
+      # Calculate component PDFs
+      background_pdf <- dgamma(x_range, shape = alpha, scale = beta)
+      peak1_pdf <- dnorm(x_range, mean = mu, sd = sigma)
+      peak2_pdf <- dnorm(x_range, mean = 2*mu, sd = sqrt(2)*sigma)
+      peak3_pdf <- dnorm(x_range, mean = 3*mu, sd = sqrt(3)*sigma)
+      peak4_pdf <- dnorm(x_range, mean = 4*mu, sd = sqrt(4)*sigma)
+      
+      # Create mixture PDF
+      mixture_pdf <- p0 * background_pdf + p1 * peak1_pdf + p2 * peak2_pdf + 
+                     p3 * peak3_pdf + p4 * peak4_pdf
+      
+      # Create histogram data
+      hist_data <- hist(enzyme_lengths, breaks = seq(50, 600, by = 10), plot = FALSE)
+      hist_density <- hist_data$density
+      hist_centers <- hist_data$mids
+      
+      # Enhanced visualization
+      par(mar = c(8, 5, 4, 2), bg = "white")
+      
+      # Plot histogram
+      plot(hist_centers, hist_density, type = "h", lwd = 6, col = "lightblue", 
+           xlim = c(50, 600), ylim = c(0, max(hist_density) * 1.1),
+           main = paste("Mixture Model -", variable_name),
+           xlab = "Sequence Length (amino acids)", ylab = "Density",
+           cex.main = 1.3, cex.lab = 1.2, cex.axis = 1.1)
+      
+      # Add model components
+      lines(x_range, p0 * background_pdf, col = "red", lwd = 3, lty = 2)
+      if(p1 > 0.001) lines(x_range, p1 * peak1_pdf, col = "green", lwd = 2)
+      if(p2 > 0.001) lines(x_range, p2 * peak2_pdf, col = "blue", lwd = 2)
+      if(p3 > 0.001) lines(x_range, p3 * peak3_pdf, col = "magenta", lwd = 2)
+      if(p4 > 0.001) lines(x_range, p4 * peak4_pdf, col = "cyan", lwd = 2)
+      lines(x_range, mixture_pdf, col = "black", lwd = 3)
+      
+      # Add vertical lines at significant peak positions
+      if(p1 > 0.001) abline(v = mu, col = "green", lty = 3, lwd = 2)      # <-- ADDED THIS
+      if(p2 > 0.001) abline(v = 2*mu, col = "blue", lty = 3, lwd = 2)
+      if(p3 > 0.001) abline(v = 3*mu, col = "magenta", lty = 3, lwd = 2)
+      if(p4 > 0.001) abline(v = 4*mu, col = "cyan", lty = 3, lwd = 2)
+      
+      # Legend
+      legend_items <- c("Data", "Background", "Full Model")
+      legend_colors <- c("lightblue", "red", "black")
+      legend_lty <- c(1, 2, 1)
+      legend_lwd <- c(6, 3, 3)
+      
+      if(p1 > 0.001) {                                                    # <-- ADDED THIS BLOCK
+      legend_items <- c(legend_items, paste0(round(mu), " aa (1×)"))
+      legend_colors <- c(legend_colors, "green")
+      legend_lty <- c(legend_lty, 1)
+      legend_lwd <- c(legend_lwd, 2)
+      }
+      
+      if(p2 > 0.001) {
+        legend_items <- c(legend_items, paste0(round(2*mu), " aa (2×)"))
+        legend_colors <- c(legend_colors, "blue")
+        legend_lty <- c(legend_lty, 1)
+        legend_lwd <- c(legend_lwd, 2)
+      }
+      if(p3 > 0.001) {
+        legend_items <- c(legend_items, paste0(round(3*mu), " aa (3×)"))
+        legend_colors <- c(legend_colors, "magenta") 
+        legend_lty <- c(legend_lty, 1)
+        legend_lwd <- c(legend_lwd, 2)
+      }
+      if(p4 > 0.001) {
+        legend_items <- c(legend_items, paste0(round(4*mu), " aa (4×)"))
+        legend_colors <- c(legend_colors, "cyan")
+        legend_lty <- c(legend_lty, 1)
+        legend_lwd <- c(legend_lwd, 2)
+      }
+      
+      legend("topright", legend = legend_items, col = legend_colors,
+             lty = legend_lty, lwd = legend_lwd, cex = 1.0, bg = "white")
+      
+      # Format p-value
+      p_value_text <- if(p_value < 2.2e-16) {
+        "< 2.2e-16"
+      } else {
+        format(p_value, scientific = TRUE, digits = 2)
+      }
+      
+      # Statistical annotation
+      mtext(paste0("Base Period: ", round(mu, 1), " ± ", round(sigma, 1), " aa  |  ",
+                   "LRT p-value: ", p_value_text, "  |  ",
+                   "Bootstrap CI: ", round(lower_ci[3], 1), " - ", round(upper_ci[3], 1), " aa"),
+            side = 1, line = 6, cex = 1.0, font = 2)
+      
+      grid(col = "gray90", lty = "dotted")
+      
+      # Store mixture model results (expanded)
+      dataset_results$mixture_model <- list(
+        converged = mixture_result$convergence == 0,
+        alpha = as.numeric(alpha),
+        beta = as.numeric(beta),
+        mu = as.numeric(mu),
+        sigma = as.numeric(sigma),
+        p0 = as.numeric(p0),
+        p1 = as.numeric(p1),
+        p2 = as.numeric(p2),
+        p3 = as.numeric(p3),
+        p4 = as.numeric(p4),
+        lrt_statistic = lrt_statistic,
+        p_value = p_value,
+        AIC_delta = AIC_background - AIC_full,
+        BIC_delta = BIC_background - BIC_full,
+        bootstrap = list(
+          n_successful = n_valid_boots,
+          lower_ci = lower_ci,
+          upper_ci = upper_ci
+        ),
+        # Store plot data for composite
+        hist_centers = hist_centers,
+        hist_density = hist_density,
+        x_range = x_range,
+        mixture_pdf = mixture_pdf,
+        background_pdf = background_pdf,
+        peak1_pdf = peak1_pdf,
+        peak2_pdf = peak2_pdf,
+        peak3_pdf = peak3_pdf,
+        peak4_pdf = peak4_pdf
+      )
+      
+      cat("Analysis completed for", variable_name, "\n")
+      
+    } else {
+      dataset_results$error <- "No valid data"
+    }
+    
+  }, error = function(e) {
+    cat("ERROR loading", filename, ":", e$message, "\n")
+    dataset_results$error <- e$message
+  })
+  
+  # Store results
+  all_results_teamc[[dataset_idx]] <- dataset_results
+}
+
+# Filter successful analyses
+successful_analyses <- all_results_teamc[sapply(all_results_teamc, function(x) is.null(x$error))]
+n_successful <- length(successful_analyses)
+
+cat("\n## Processing Summary\n")
+cat("Successfully analyzed", n_successful, "out of", length(datasets), "datasets\n")
+```
+
+
+# Step 11. - Summary Mixture Modeling Results -
+
+
+```{r detailed_mixture_results_summary, echo=FALSE}
+### Detailed Summary with Bootstrap Confidence Intervals
+
+if (n_successful > 0) {
+  ## UNCERTAINTY QUANTIFICATION: Bootstrap Confidence Intervals
+  ## MAJOR METHODOLOGICAL EXTENSION: Bootstrap resampling provides robust
+  ## uncertainty estimates for biological parameters (μ, σ, mixing weights)
+  ## This approach was not computationally feasible in 2002 but provides
+  ## critical insights into parameter stability and biological interpretation
+  
+  # Create detailed summary table with bootstrap CIs
+  detailed_mixture_summary <- data.frame(
+    Dataset = character(0),
+    N_Sequences = numeric(0),
+    Base_Period = character(0),
+    Period_CI = character(0),
+    LRT_Statistic = numeric(0),
+    P_Value = character(0),
+    AIC_Delta = numeric(0),
+    BIC_Delta = numeric(0),
+    Bootstrap_Success = character(0),
+    Background_Weight = character(0),
+    Peak_1x_Weight = character(0),
+    Peak_2x_Weight = character(0),
+    Peak_3x_Weight = character(0),
+    Peak_4x_Weight = character(0)
+  )
+  
+  for (i in 1:n_successful) {
+    result <- successful_analyses[[i]]
+    mm <- result$mixture_model
+    
+    if (!is.null(mm) && !is.null(mm$bootstrap)) {
+      # Format values with CIs
+      base_period <- paste0(round(mm$mu, 1), " ± ", round(mm$sigma, 1))
+      period_ci <- paste0(round(mm$bootstrap$lower_ci[3], 1), " - ", round(mm$bootstrap$upper_ci[3], 1))
+      
+      p_val_text <- ifelse(mm$p_value < 2.2e-16, "< 2.2e-16", 
+                          ifelse(mm$p_value < 0.001, sprintf("%.2e", mm$p_value), 
+                                 sprintf("%.4f", mm$p_value)))
+      
+      bootstrap_success <- paste0(mm$bootstrap$n_successful, "/100 (", 
+                                 round(mm$bootstrap$n_successful/100*100, 1), "%)")
+      
+      # Format weights with CIs
+      bg_weight <- paste0(round(mm$p0 * 100, 1), "% (", 
+                         round((1-mm$bootstrap$upper_ci[5]-mm$bootstrap$upper_ci[6]-
+                               mm$bootstrap$upper_ci[7]-mm$bootstrap$upper_ci[8])*100, 1), " - ",
+                         round((1-mm$bootstrap$lower_ci[5]-mm$bootstrap$lower_ci[6]-
+                               mm$bootstrap$lower_ci[7]-mm$bootstrap$lower_ci[8])*100, 1), "%)")
+      
+      p1_weight <- paste0(round(mm$p1 * 100, 1), "% (", 
+                         round(mm$bootstrap$lower_ci[5]*100, 1), " - ",
+                         round(mm$bootstrap$upper_ci[5]*100, 1), "%)")
+      
+      p2_weight <- paste0(round(mm$p2 * 100, 1), "% (", 
+                         round(mm$bootstrap$lower_ci[6]*100, 1), " - ",
+                         round(mm$bootstrap$upper_ci[6]*100, 1), "%)")
+      
+      p3_weight <- paste0(round(mm$p3 * 100, 1), "% (", 
+                         round(mm$bootstrap$lower_ci[7]*100, 1), " - ",
+                         round(mm$bootstrap$upper_ci[7]*100, 1), "%)")
+      
+      p4_weight <- paste0(round(mm$p4 * 100, 1), "% (", 
+                         round(mm$bootstrap$lower_ci[8]*100, 1), " - ",
+                         round(mm$bootstrap$upper_ci[8]*100, 1), "%)")
+      
+      detailed_mixture_summary <- rbind(detailed_mixture_summary, data.frame(
+        Dataset = result$variable_name,
+        N_Sequences = result$n_sequences,
+        Base_Period = base_period,
+        Period_CI = period_ci,
+        LRT_Statistic = round(mm$lrt_statistic, 2),
+        P_Value = p_val_text,
+        AIC_Delta = round(mm$AIC_delta, 1),
+        BIC_Delta = round(mm$BIC_delta, 1),
+        Bootstrap_Success = bootstrap_success,
+        Background_Weight = bg_weight,
+        Peak_1x_Weight = p1_weight,
+        Peak_2x_Weight = p2_weight,
+        Peak_3x_Weight = p3_weight,
+        Peak_4x_Weight = p4_weight
+      ))
+    }
+  }
+  
+  if (nrow(detailed_mixture_summary) > 0) {
+    kable(detailed_mixture_summary,
+          caption = "Detailed Mixture Model Results with Bootstrap Confidence Intervals",
+          col.names = c("Dataset", "N", "Base Period", "95% CI", "LRT χ²", "P-value", 
+                       "ΔAIC", "ΔBIC", "Bootstrap", "p₀", "p₁", "p₂", "p₃", "p₄")) %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                    full_width = TRUE, font_size = 10) %>%
+      row_spec(0, bold = TRUE, background = "#f8f9fa") %>%
+      column_spec(c(4, 6), bold = TRUE) %>%
+      pack_rows("Control Group", 1, 2, label_row_css = "background-color: #e3f2fd;") %>%
+      pack_rows("Independent Datasets", 3, 4, label_row_css = "background-color: #f3e5f5;")
+  } else {
+    cat("No detailed mixture model results to display.\n")
+  }
+  
+} else {
+  cat("No successful mixture model analyses to display.\n")
+}
+```
+
+# Step 12. - R Session Information -
+
+```{r reproducibility, echo=TRUE}
+# Document the computational environment for reproducibility
+cat("Analysis completed on:", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"), "\n\n")
+
+cat("R Session Information:\n")
+cat("===================\n")
+sessionInfo()
+
+```

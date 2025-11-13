@@ -1,0 +1,39 @@
+
+## Datasets 1-4 - Google Drive - 
+
+https://drive.google.com/drive/folders/1G4pJfdpQbQLYebQNLpCW9Qh0ct2FEjer?usp=sharing
+
+## ReadMe
+
+Short Version (Processing Instructions)
+
+The short SAD reproducibility package and all materials can be accessed using this shared Google Drive Folder. Please only utilize the files present in “Analysis- Concise Version” for this analysis.
+
+Purpose: Quick verification of Dataset 4 preprocessing.
+
+Scope: Runs Dataset 3 through clustering, length filtering, and non-redundant processing.
+
+Outputs: Three files (dataset4_length_filtered.csv, dataset4_nonredundant_final.csv, dataset4_redundancy_analysis.csv).
+
+Recommended if you only need to confirm that our processed dataset matches the description in the manuscript.
+
+Long Version (README START HERE)
+
+The comprehensive SAD reproducibility package and all materials can be accessed using this shared Google Drive Folder. For this version, please utilize all files/folders in “Analysis- Extended Version” (starting with the README file).
+
+Purpose: Full reproducibility pathway for all four datasets.
+
+Scope: Includes step-by-step guidance for clustering, filtering, SAD analysis, statistical modeling, and output verification.
+
+Options:
+
+Option A: Full verification (recreate Dataset 4 from scratch).
+
+Option B: Quick-Start Bundle (recommended; one download with all files/scripts pre-organized).
+
+Option C: Browse results only (no coding required).
+
+Recommended if you want to fully reproduce the pipeline and confirm all analysis stages.
+In short: use the Processing Instructions for a concise dataset check, or the README for a full step-by-step reproducibility test.
+
+
